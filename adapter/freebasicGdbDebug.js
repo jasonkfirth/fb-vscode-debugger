@@ -593,6 +593,10 @@ class FreeBasicGdbAdapter {
         this.breakpointsBySource = new Map();
         this.terminatedSent = false;
         this.exitedSent = false;
+        this.clientSupportsRunInTerminal = false;
+        this.pendingClientRequests = new Map();
+        this.pendingLaunchRequest = null;
+        this.inferiorTerminalSession = null;
     }
 
     start() {
@@ -641,6 +645,11 @@ class FreeBasicGdbAdapter {
     }
 
     async handleMessage(message) {
+        if (message.type === "response") {
+            this.handleClientResponse(message);
+            return;
+        }
+
         if (message.type !== "request")
             return;
 
@@ -655,8 +664,46 @@ class FreeBasicGdbAdapter {
         try {
             await this[handlerName](message, message.arguments || {});
         } catch (error) {
+            if (message.command === "launch" && this.pendingLaunchRequest === message)
+                this.pendingLaunchRequest = null;
+
+            if (message.command === "configurationDone" && this.pendingLaunchRequest) {
+                this.sendErrorResponse(this.pendingLaunchRequest, error);
+                this.pendingLaunchRequest = null;
+            }
+
             this.sendErrorResponse(message, error);
         }
+    }
+
+    handleClientResponse(message) {
+        const pending = this.pendingClientRequests.get(Number(message.request_seq));
+
+        if (!pending)
+            return;
+
+        this.pendingClientRequests.delete(Number(message.request_seq));
+
+        if (message.success === false) {
+            pending.reject(new Error(message.message || "Client request failed."));
+            return;
+        }
+
+        pending.resolve(message.body || {});
+    }
+
+    sendClientRequest(command, args) {
+        const requestSequence = this.sequence++;
+
+        return new Promise((resolve, reject) => {
+            this.pendingClientRequests.set(requestSequence, { resolve, reject });
+            this.connection.send({
+                seq: requestSequence,
+                type: "request",
+                command,
+                arguments: args || {}
+            });
+        });
     }
 
     /* --------------------------------------------------------------------- */
@@ -664,6 +711,10 @@ class FreeBasicGdbAdapter {
     /* --------------------------------------------------------------------- */
 
     async initializeRequest(request) {
+        this.clientSupportsRunInTerminal = Boolean(
+            request.arguments && request.arguments.supportsRunInTerminalRequest
+        );
+
         this.sendResponse(request, {
             supportsConfigurationDoneRequest: true,
             supportsEvaluateForHovers: true,
@@ -676,6 +727,7 @@ class FreeBasicGdbAdapter {
         validateLaunchArguments(args);
         this.terminatedSent = false;
         this.exitedSent = false;
+        this.pendingLaunchRequest = request;
 
         if (!args.skipBuild) {
             this.sendOutput("console", `Compiling ${args.sourceFile}\n`);
@@ -686,11 +738,11 @@ class FreeBasicGdbAdapter {
 
         this.gdb = new GdbSession(this);
         await this.gdb.start(args);
+        await this.prepareInferiorPresentation(args);
 
         this.launchArguments = args;
         this.launched = true;
         this.sendEvent("initialized");
-        this.sendResponse(request);
     }
 
     async configurationDoneRequest(request) {
@@ -702,6 +754,11 @@ class FreeBasicGdbAdapter {
             await this.gdb.sendCommand("-exec-run");
 
         this.sendResponse(request);
+
+        if (this.pendingLaunchRequest) {
+            this.sendResponse(this.pendingLaunchRequest);
+            this.pendingLaunchRequest = null;
+        }
     }
 
     async setBreakpointsRequest(request, args) {
@@ -902,6 +959,7 @@ class FreeBasicGdbAdapter {
         if (this.gdb)
             await this.gdb.stop();
 
+        this.closeInferiorTerminalSession();
         this.sendResponse(request);
         process.exit(0);
     }
@@ -1020,11 +1078,13 @@ class FreeBasicGdbAdapter {
     }
 
     onTargetExited(payload) {
+        this.closeInferiorTerminalSession();
         this.sendExitedEvent(extractExitCode(payload));
         this.sendTerminatedEvent();
     }
 
     onDebuggerExit(_code, _signal) {
+        this.closeInferiorTerminalSession();
         this.sendTerminatedEvent();
     }
 
@@ -1045,11 +1105,137 @@ class FreeBasicGdbAdapter {
             exitCode
         });
     }
+
+    async prepareInferiorPresentation(args) {
+        const consoleKind = normalizeConsoleKind(args.console);
+
+        if (process.platform === "win32") {
+            if (consoleKind === "internalConsole")
+                await this.gdb.sendCommand("-gdb-set new-console off");
+            else
+                await this.gdb.sendCommand("-gdb-set new-console on");
+
+            return;
+        }
+
+        if (consoleKind === "internalConsole")
+            return;
+
+        if (!this.clientSupportsRunInTerminal) {
+            this.sendOutput(
+                "console",
+                "The client does not support runInTerminal. Falling back to internal debugger I/O.\n"
+            );
+            return;
+        }
+
+        this.inferiorTerminalSession = await createUnixInferiorTerminalSession(
+            this,
+            args.cwd,
+            consoleKind
+        );
+
+        await this.gdb.sendCommand(
+            `-inferior-tty-set ${escapeMiString(this.inferiorTerminalSession.ttyPath)}`
+        );
+    }
+
+    closeInferiorTerminalSession() {
+        if (!this.inferiorTerminalSession)
+            return;
+
+        try {
+            fs.writeFileSync(this.inferiorTerminalSession.exitMarkerPath, "done\n", "utf8");
+        } catch (_error) {
+            /*
+                The helper terminal is best-effort. If the marker write fails,
+                the debug session should still shut down cleanly.
+            */
+        }
+
+        this.inferiorTerminalSession = null;
+    }
 }
 
 /* ------------------------------------------------------------------------- */
 /* Utility helpers                                                           */
 /* ------------------------------------------------------------------------- */
+
+function getDefaultConsoleKind(platformName) {
+    const resolvedPlatform = platformName || process.platform;
+
+    if (resolvedPlatform === "win32")
+        return "externalTerminal";
+
+    return "integratedTerminal";
+}
+
+function normalizeConsoleKind(consoleKind, platformName) {
+    const requestedConsoleKind = String(consoleKind || "platformDefault").trim();
+
+    if (requestedConsoleKind === "internalConsole" ||
+        requestedConsoleKind === "integratedTerminal" ||
+        requestedConsoleKind === "externalTerminal") {
+        return requestedConsoleKind;
+    }
+
+    return getDefaultConsoleKind(platformName);
+}
+
+async function createUnixInferiorTerminalSession(adapter, cwd, consoleKind) {
+    const token = `${process.pid}-${Date.now()}-${Math.round(Math.random() * 100000)}`;
+    const ttyMarkerPath = path.join(os.tmpdir(), `freebasic-debugger-tty-${token}.txt`);
+    const exitMarkerPath = path.join(os.tmpdir(), `freebasic-debugger-exit-${token}.txt`);
+    const shellCommand = [
+        `trap "rm -f -- '${toPosixShellPath(ttyMarkerPath)}' '${toPosixShellPath(exitMarkerPath)}'" EXIT`,
+        `tty > '${toPosixShellPath(ttyMarkerPath)}'`,
+        "printf '\\nFreeBASIC debugger terminal ready.\\n'",
+        "printf 'This terminal will be used by the debuggee while the session is running.\\n\\n'",
+        `while [ ! -f '${toPosixShellPath(exitMarkerPath)}' ]; do sleep 1; done`
+    ].join("; ");
+
+    await adapter.sendClientRequest("runInTerminal", {
+        kind: consoleKind === "externalTerminal" ? "external" : "integrated",
+        title: "FreeBASIC Program",
+        cwd,
+        args: ["/bin/sh", "-lc", shellCommand]
+    });
+
+    return {
+        ttyPath: await waitForTextFile(ttyMarkerPath, 10000),
+        exitMarkerPath
+    };
+}
+
+function waitForTextFile(filePath, timeoutMs) {
+    const startedAt = Date.now();
+
+    return new Promise((resolve, reject) => {
+        const poll = () => {
+            if (fs.existsSync(filePath)) {
+                const value = fs.readFileSync(filePath, "utf8").trim();
+
+                if (value) {
+                    resolve(value);
+                    return;
+                }
+            }
+
+            if (Date.now() - startedAt >= timeoutMs) {
+                reject(new Error(`Timed out waiting for terminal information at '${filePath}'.`));
+                return;
+            }
+
+            setTimeout(poll, 50);
+        };
+
+        poll();
+    });
+}
+
+function toPosixShellPath(filePath) {
+    return String(filePath).replace(/\\/g, "/").replace(/'/g, "'\"'\"'");
+}
 
 function ensureSession(gdbSession) {
     if (!gdbSession)
@@ -1348,6 +1534,11 @@ module.exports = {
         parseMiLine,
         GdbSession,
         FreeBasicGdbAdapter,
+        getDefaultConsoleKind,
+        normalizeConsoleKind,
+        createUnixInferiorTerminalSession,
+        waitForTextFile,
+        toPosixShellPath,
         ensureSession,
         validateLaunchArguments,
         fileExists,

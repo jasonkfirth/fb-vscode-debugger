@@ -1,7 +1,14 @@
 .git/**
 .test-extensions/**
 .test-user-data/**
+.vsix-build/**
+.vsix-build-stage2/**
+.vsix-build-stage3/**
+.vsix-package-stage/**
+.vsix-test-extensions/**
+.vsix-test-user-data/**
 test-workspace/**
 tests/**
+tests/.unit_*.txt
 debug.log
 *.ps1

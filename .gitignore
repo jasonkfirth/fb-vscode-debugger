@@ -1,13 +1,14 @@
 .test-extensions/
 .test-user-data/
-test-workspace/
 .vsix-build/
 .vsix-build-stage2/
 .vsix-build-stage3/
+.vsix-package-stage/
 .vsix-test-extensions/
 .vsix-test-user-data/
 test-workspace/
-.vsix*/
 *.vsix
-*.zip
+*.vsix.zip
 debug.log
+tests/.unit_*.txt
+assets/freebasic-horse.gif

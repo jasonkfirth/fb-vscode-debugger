@@ -27,6 +27,7 @@
 "use strict";
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const cp = require("child_process");
 const stream = require("stream");
@@ -117,6 +118,19 @@ async function testBuildCompilerArgumentsAddsDebugAndOutput() {
     });
 
     assert.deepStrictEqual(argumentsList, ["-lang", "fb", "-g", "demo.bas", "-x", "demo.exe"]);
+}
+
+async function testConsoleHelpersChooseExpectedDefaults() {
+    assert.strictEqual(testApi.getDefaultConsoleKind("win32"), "externalTerminal");
+    assert.strictEqual(testApi.getDefaultConsoleKind("linux"), "integratedTerminal");
+    assert.strictEqual(
+        testApi.normalizeConsoleKind("platformDefault", "darwin"),
+        "integratedTerminal"
+    );
+    assert.strictEqual(
+        testApi.normalizeConsoleKind("externalTerminal", "linux"),
+        "externalTerminal"
+    );
 }
 
 async function testCompileProgramSucceedsWithMockCompiler() {
@@ -217,6 +231,178 @@ async function testMapStopReasonAndExpandableValueHelpers() {
     assert.strictEqual(testApi.shouldTryExpandValue("plain"), false);
 }
 
+async function testLaunchResponseWaitsForConfigurationDone() {
+    const sentMessages = [];
+    const connection = {
+        send(message) {
+            sentMessages.push(message);
+        },
+        start() {}
+    };
+    const adapter = new testApi.FreeBasicGdbAdapter(connection);
+    const startCalls = [];
+    const gdbCommands = [];
+
+    await withPatchedMethod(
+        testApi.GdbSession.prototype,
+        "start",
+        async function patchedStart(args) {
+            startCalls.push(args);
+        },
+        async () => {
+            await withPatchedMethod(
+                testApi.GdbSession.prototype,
+                "sendCommand",
+                async function patchedSendCommand(command) {
+                    gdbCommands.push(command);
+                    return { payload: {} };
+                },
+                async () => {
+                    await withPatchedMethod(
+                        testApi.FreeBasicGdbAdapter.prototype,
+                        "prepareInferiorPresentation",
+                        async () => {},
+                        async () => {
+                            await adapter.launchRequest({
+                                seq: 10,
+                                command: "launch"
+                            }, {
+                                sourceFile: "demo.bas",
+                                program: "demo.exe",
+                                cwd: process.cwd(),
+                                compilerPath: "fbc",
+                                gdbPath: "gdb",
+                                args: [],
+                                env: {},
+                                skipBuild: true,
+                                stopAtEntry: false
+                            });
+
+                            assert.strictEqual(startCalls.length, 1);
+                            assert.strictEqual(
+                                sentMessages.some((message) => (
+                                    message.type === "response" &&
+                                    message.command === "launch"
+                                )),
+                                false
+                            );
+                            assert.strictEqual(
+                                sentMessages.some((message) => (
+                                    message.type === "event" &&
+                                    message.event === "initialized"
+                                )),
+                                true
+                            );
+
+                            await adapter.configurationDoneRequest({
+                                seq: 11,
+                                command: "configurationDone"
+                            });
+                        }
+                    );
+                }
+            );
+        }
+    );
+
+    assert.strictEqual(gdbCommands[0], "-exec-run");
+    assert.strictEqual(
+        sentMessages.some((message) => (
+            message.type === "response" &&
+            message.command === "configurationDone"
+        )),
+        true
+    );
+    assert.strictEqual(
+        sentMessages.some((message) => (
+            message.type === "response" &&
+            message.command === "launch"
+        )),
+        true
+    );
+}
+
+async function testPrepareInferiorPresentationUsesRunInTerminalOnUnix() {
+    const connection = {
+        send() {},
+        start() {}
+    };
+    const adapter = new testApi.FreeBasicGdbAdapter(connection);
+    const tempDirectory = createTemporaryDirectory("fb-terminal-");
+    const originalNow = Date.now;
+    const originalRandom = Math.random;
+    const sentCommands = [];
+    const clientRequests = [];
+
+    adapter.clientSupportsRunInTerminal = true;
+    adapter.gdb = {
+        sendCommand: async (command) => {
+            sentCommands.push(command);
+            return { payload: {} };
+        }
+    };
+
+    Date.now = () => 1000;
+    Math.random = () => 0;
+
+    try {
+        await withTemporaryPlatform("linux", async () => {
+            await withPatchedMethod(os, "tmpdir", () => tempDirectory, async () => {
+                adapter.sendClientRequest = async (command, args) => {
+                    const token = `${process.pid}-1000-0`;
+                    const ttyMarkerPath = path.join(
+                        tempDirectory,
+                        `freebasic-debugger-tty-${token}.txt`
+                    );
+
+                    clientRequests.push({ command, args });
+                    fs.writeFileSync(ttyMarkerPath, "/dev/pts/7\n", "utf8");
+
+                    return {};
+                };
+
+                await adapter.prepareInferiorPresentation({
+                    cwd: tempDirectory,
+                    console: "integratedTerminal"
+                });
+            });
+        });
+    } finally {
+        Date.now = originalNow;
+        Math.random = originalRandom;
+    }
+
+    assert.strictEqual(clientRequests.length, 1);
+    assert.strictEqual(clientRequests[0].command, "runInTerminal");
+    assert.strictEqual(clientRequests[0].args.kind, "integrated");
+    assert.strictEqual(sentCommands[0], "-inferior-tty-set \"/dev/pts/7\"");
+    assert.strictEqual(adapter.inferiorTerminalSession.ttyPath, "/dev/pts/7");
+}
+
+async function testPrepareInferiorPresentationUsesNewConsoleOnWindows() {
+    const connection = {
+        send() {},
+        start() {}
+    };
+    const adapter = new testApi.FreeBasicGdbAdapter(connection);
+    const sentCommands = [];
+
+    adapter.gdb = {
+        sendCommand: async (command) => {
+            sentCommands.push(command);
+            return { payload: {} };
+        }
+    };
+
+    await withTemporaryPlatform("win32", async () => {
+        await adapter.prepareInferiorPresentation({
+            console: "externalTerminal"
+        });
+    });
+
+    assert.deepStrictEqual(sentCommands, ["-gdb-set new-console on"]);
+}
+
 async function testGdbSessionRejectsPendingCommandsWhenDebuggerExits() {
     const outputs = [];
     const adapter = {
@@ -266,10 +452,15 @@ module.exports = [
     testResolveGdbPathFindsKnownWindowsInstall,
     testNormalizeHelpersProduceExpectedShapes,
     testBuildCompilerArgumentsAddsDebugAndOutput,
+    testConsoleHelpersChooseExpectedDefaults,
     testCompileProgramSucceedsWithMockCompiler,
     testCompileProgramRejectsWithCompilerOutput,
     testGdbSessionStartWaitsForPromptAndSendsSetupCommands,
-    testMapStopReasonAndExpandableValueHelpers
+    testMapStopReasonAndExpandableValueHelpers,
+    testLaunchResponseWaitsForConfigurationDone,
+    testPrepareInferiorPresentationUsesRunInTerminalOnUnix,
+    testPrepareInferiorPresentationUsesNewConsoleOnWindows,
+    testGdbSessionRejectsPendingCommandsWhenDebuggerExits
 ];
 
 /* end of tests/adapter.unit.js */

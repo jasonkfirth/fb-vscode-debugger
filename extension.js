@@ -43,6 +43,12 @@ const LINUX_GDB_CANDIDATES = toolchainPaths.LINUX_GDB_CANDIDATES;
 const FREEBASIC_DIAGNOSTIC_SOURCE = "FreeBASIC";
 const FREEBASIC_SETTINGS_SECTION = "freebasic.debugger";
 const FREEBASIC_OUTPUT_CHANNEL_NAME = "FreeBASIC Debugger";
+const VALID_CONSOLE_KINDS = [
+    "platformDefault",
+    "internalConsole",
+    "integratedTerminal",
+    "externalTerminal"
+];
 
 /* ------------------------------------------------------------------------- */
 /* Source file helpers                                                       */
@@ -73,6 +79,27 @@ function getActiveSourceFile() {
         return null;
 
     return documentPath;
+}
+
+function getDefaultConsoleKind(platformName) {
+    const resolvedPlatform = platformName || process.platform;
+
+    if (resolvedPlatform === "win32")
+        return "externalTerminal";
+
+    return "integratedTerminal";
+}
+
+function normalizeConsoleKind(consoleKind, platformName) {
+    const requestedConsoleKind = String(consoleKind || "platformDefault").trim();
+
+    if (requestedConsoleKind === "platformDefault")
+        return getDefaultConsoleKind(platformName);
+
+    if (VALID_CONSOLE_KINDS.indexOf(requestedConsoleKind) !== -1)
+        return requestedConsoleKind;
+
+    return getDefaultConsoleKind(platformName);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -487,6 +514,7 @@ function createDefaultConfiguration(sourceFile) {
         compilerArgs: settings.get("compilerArgs", []),
         args: settings.get("programArgs", []),
         env: {},
+        console: normalizeConsoleKind(settings.get("console", "platformDefault")),
         skipBuild: false,
         stopAtEntry: settings.get("stopAtEntry", false)
     };
@@ -530,6 +558,9 @@ function buildConfigurationSkeleton(configuration) {
 
     if (!resolvedConfiguration.env)
         resolvedConfiguration.env = {};
+
+    if (!resolvedConfiguration.console)
+        resolvedConfiguration.console = settings.get("console", "platformDefault");
 
     if (typeof resolvedConfiguration.stopAtEntry !== "boolean")
         resolvedConfiguration.stopAtEntry = settings.get("stopAtEntry", false);
@@ -576,6 +607,7 @@ function finalizeConfiguration(configuration) {
         ? resolvedConfiguration.args
         : [];
     resolvedConfiguration.env = resolvedConfiguration.env || {};
+    resolvedConfiguration.console = normalizeConsoleKind(resolvedConfiguration.console);
     resolvedConfiguration.stopAtEntry = Boolean(resolvedConfiguration.stopAtEntry);
     resolvedConfiguration.skipBuild = Boolean(resolvedConfiguration.skipBuild);
 
@@ -751,6 +783,8 @@ module.exports = {
         resolveConfiguredCompilerPath,
         resolveConfiguredGdbPath,
         getProgramSuffix,
+        getDefaultConsoleKind,
+        normalizeConsoleKind,
         isFreeBasicSourceExtension,
         isRunnableFreeBasicSourceExtension,
         isRunnableSourceFile,

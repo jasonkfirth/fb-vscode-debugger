@@ -28,7 +28,12 @@ manual task wiring every time.
 - On Windows, compiler discovery prefers `fbc.exe` first, then falls back to
   `fbc64.exe` / `fbc32.exe` when needed.
 - On Windows, the generated output name ends in `.exe`.
+- On Windows, console programs default to an external console window because
+  that is the most reliable way to let a GDB-launched console program interact
+  normally.
 - On Linux and macOS, the generated output name has no `.exe` suffix.
+- On Linux and macOS, console programs default to the integrated terminal so
+  the debuggee gets a real TTY.
 - If your setup uses a non-default compiler or debugger location, set
   `compilerPath` and `gdbPath` in `launch.json`.
 
@@ -111,6 +116,7 @@ these in normal VS Code settings:
 - `freebasic.debugger.arch`
 - `freebasic.debugger.compilerArgs`
 - `freebasic.debugger.programArgs`
+- `freebasic.debugger.console`
 - `freebasic.debugger.stopAtEntry`
 
 ## Notes

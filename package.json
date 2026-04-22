@@ -2,7 +2,7 @@
   "name": "freebasic-native-debugger",
   "displayName": "FreeBASIC Native Debugger",
   "description": "Press F5 on a FreeBASIC source file, build it with fbc, and debug it with GDB.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "SJZero",
   "license": "MIT",
   "icon": "assets/icon.png",
@@ -86,6 +86,17 @@
           },
           "default": [],
           "description": "Default program arguments passed to the debugged executable."
+        },
+        "freebasic.debugger.console": {
+          "type": "string",
+          "enum": [
+            "platformDefault",
+            "internalConsole",
+            "integratedTerminal",
+            "externalTerminal"
+          ],
+          "default": "platformDefault",
+          "description": "Where the program should appear when debugging. platformDefault uses an external console on Windows and the integrated terminal on Linux and macOS."
         },
         "freebasic.debugger.stopAtEntry": {
           "type": "boolean",
@@ -177,6 +188,16 @@
                 "type": "object",
                 "default": {},
                 "description": "Environment variables applied to both the compiler and GDB launch."
+              },
+              "console": {
+                "type": "string",
+                "enum": [
+                  "platformDefault",
+                  "internalConsole",
+                  "integratedTerminal",
+                  "externalTerminal"
+                ],
+                "description": "Where the program should appear when debugging. If omitted, the extension uses a platform-appropriate default."
               },
               "stopAtEntry": {
                 "type": "boolean",

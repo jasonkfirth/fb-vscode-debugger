@@ -86,6 +86,7 @@ async function testCreateDefaultConfigurationUsesSettingsAndPlatformSuffix() {
         arch: "x64",
         compilerArgs: ["-w", "pedantic"],
         programArgs: ["demo"],
+        console: "platformDefault",
         stopAtEntry: true
     };
 
@@ -98,9 +99,17 @@ async function testCreateDefaultConfigurationUsesSettingsAndPlatformSuffix() {
             assert.strictEqual(configuration.compilerPath, "C:\\freebasic\\fbc.exe");
             assert.deepStrictEqual(configuration.compilerArgs, ["-w", "pedantic"]);
             assert.deepStrictEqual(configuration.args, ["demo"]);
+            assert.strictEqual(configuration.console, "externalTerminal");
             assert.strictEqual(configuration.stopAtEntry, true);
         });
     });
+}
+
+async function testConsoleHelpersChooseExpectedDefaults() {
+    assert.strictEqual(testApi.getDefaultConsoleKind("win32"), "externalTerminal");
+    assert.strictEqual(testApi.getDefaultConsoleKind("linux"), "integratedTerminal");
+    assert.strictEqual(testApi.normalizeConsoleKind("platformDefault", "darwin"), "integratedTerminal");
+    assert.strictEqual(testApi.normalizeConsoleKind("internalConsole", "win32"), "internalConsole");
 }
 
 async function testBuildConfigurationSkeletonKeepsVariableBasedSourceFile() {
@@ -268,6 +277,7 @@ module.exports = [
     testChooseCompilerPathPrefersWindowsFbcExe,
     testChooseGdbPathPrefersKnownWindowsInstall,
     testCreateDefaultConfigurationUsesSettingsAndPlatformSuffix,
+    testConsoleHelpersChooseExpectedDefaults,
     testBuildConfigurationSkeletonKeepsVariableBasedSourceFile,
     testFinalizeConfigurationRejectsBiLaunchTarget,
     testParseCompilerDiagnosticsGroupsMessagesByFile,
