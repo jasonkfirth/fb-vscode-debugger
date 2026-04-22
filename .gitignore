@@ -1,0 +1,6 @@
+.test-extensions/
+.test-user-data/
+test-workspace/
+*.vsix
+debug.log
+assets/freebasic-horse.gif

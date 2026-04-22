@@ -1,0 +1,232 @@
+{
+  "name": "freebasic-native-debugger",
+  "displayName": "FreeBASIC Native Debugger",
+  "description": "Press F5 on a FreeBASIC source file, build it with fbc, and debug it with GDB.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "license": "MIT",
+  "icon": "assets/icon.png",
+  "extensionKind": [
+    "workspace"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "keywords": [
+    "freebasic",
+    "basic",
+    "gdb",
+    "debugger"
+  ],
+  "categories": [
+    "Debuggers",
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onDebugResolve:freebasic-gdb",
+    "onDebugAdapterProtocolTracker:freebasic-gdb"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "freebasic",
+        "aliases": [
+          "FreeBASIC",
+          "freebasic"
+        ],
+        "extensions": [
+          ".bas",
+          ".bi"
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "freebasic.debugCurrentFile",
+        "title": "Debug Current FreeBASIC File",
+        "category": "FreeBASIC"
+      }
+    ],
+    "configuration": {
+      "title": "FreeBASIC Native Debugger",
+      "properties": {
+        "freebasic.debugger.compilerPath": {
+          "type": "string",
+          "default": "",
+          "description": "FreeBASIC compiler path. Leave empty to auto-discover a suitable compiler."
+        },
+        "freebasic.debugger.gdbPath": {
+          "type": "string",
+          "default": "",
+          "description": "GDB path. Leave empty to auto-discover GDB."
+        },
+        "freebasic.debugger.arch": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "x86",
+            "x64"
+          ],
+          "default": "auto",
+          "description": "Preferred architecture when the debugger auto-selects a FreeBASIC compiler."
+        },
+        "freebasic.debugger.compilerArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional compiler arguments appended before the source file."
+        },
+        "freebasic.debugger.programArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Default program arguments passed to the debugged executable."
+        },
+        "freebasic.debugger.stopAtEntry": {
+          "type": "boolean",
+          "default": false,
+          "description": "Break at program entry by default when starting a debug session."
+        }
+      }
+    },
+    "breakpoints": [
+      {
+        "language": "freebasic"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "freebasic-gdb",
+        "label": "FreeBASIC GDB",
+        "program": "./adapter/freebasicGdbDebug.js",
+        "runtime": "node",
+        "languages": [
+          "freebasic"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [],
+            "properties": {
+              "name": {
+                "type": "string",
+                "default": "Debug Current FreeBASIC File",
+                "description": "Display name shown in the debug configuration picker."
+              },
+              "type": {
+                "type": "string",
+                "default": "freebasic-gdb"
+              },
+              "request": {
+                "type": "string",
+                "default": "launch"
+              },
+              "sourceFile": {
+                "type": "string",
+                "description": "FreeBASIC .bas source file to compile before launch. Defaults to the active editor file."
+              },
+              "program": {
+                "type": "string",
+                "description": "Compiled program to run under GDB. Defaults to the source file stem with the platform-appropriate executable name."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory for both the compiler and the launched program."
+              },
+              "compilerPath": {
+                "type": "string",
+                "default": "fbc",
+                "description": "Path to the FreeBASIC compiler executable."
+              },
+              "gdbPath": {
+                "type": "string",
+                "default": "gdb",
+                "description": "Path to the GDB executable."
+              },
+              "arch": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "x86",
+                  "x64"
+                ],
+                "default": "auto",
+                "description": "Select the FreeBASIC compiler automatically or force 32-bit / 64-bit."
+              },
+              "compilerArgs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": [],
+                "description": "Additional arguments passed to the FreeBASIC compiler."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": [],
+                "description": "Arguments passed to the debugged program."
+              },
+              "env": {
+                "type": "object",
+                "default": {},
+                "description": "Environment variables applied to both the compiler and GDB launch."
+              },
+              "stopAtEntry": {
+                "type": "boolean",
+                "default": false,
+                "description": "Break at program entry before normal execution begins."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "name": "Debug Current FreeBASIC File",
+            "type": "freebasic-gdb",
+            "request": "launch",
+            "sourceFile": "${file}",
+            "cwd": "${fileDirname}",
+            "arch": "auto",
+            "compilerArgs": [],
+            "args": [],
+            "stopAtEntry": false
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "FreeBASIC: Debug current file",
+            "description": "Build the active file with debug information and start it under GDB.",
+            "body": {
+              "name": "Debug Current FreeBASIC File",
+              "type": "freebasic-gdb",
+              "request": "launch",
+              "sourceFile": "${file}",
+              "cwd": "${fileDirname}",
+              "arch": "auto",
+              "compilerArgs": [],
+              "args": [],
+              "stopAtEntry": false
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "lint": "node --check extension.js && node --check adapter/freebasicGdbDebug.js",
+    "test:unit": "node tests/run_unit_tests.js",
+    "package:vsix": "vsce package",
+    "package:pre-release": "vsce package --pre-release",
+    "publish:manual": "vsce publish",
+    "publish:patch": "vsce publish patch",
+    "publish:minor": "vsce publish minor",
+    "publish:major": "vsce publish major"
+  }
+}

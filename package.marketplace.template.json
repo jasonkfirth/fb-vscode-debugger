@@ -1,0 +1,33 @@
+{
+  "name": "freebasic-native-debugger",
+  "displayName": "FreeBASIC Native Debugger",
+  "description": "Press F5 on a FreeBASIC source file, build it with fbc, and debug it with GDB.",
+  "version": "0.1.0",
+  "publisher": "your-marketplace-publisher",
+  "license": "MIT",
+  "icon": "assets/icon.png",
+  "homepage": "https://github.com/your-org/freebasic-native-debugger",
+  "bugs": {
+    "url": "https://github.com/your-org/freebasic-native-debugger/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/freebasic-native-debugger.git"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "keywords": [
+    "freebasic",
+    "basic",
+    "gdb",
+    "debugger"
+  ],
+  "categories": [
+    "Debuggers",
+    "Programming Languages"
+  ]
+}

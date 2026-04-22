@@ -1,0 +1,7 @@
+.git/**
+.test-extensions/**
+.test-user-data/**
+test-workspace/**
+tests/**
+debug.log
+*.ps1
