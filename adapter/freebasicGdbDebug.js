@@ -595,7 +595,6 @@ class FreeBasicGdbAdapter {
         this.exitedSent = false;
         this.clientSupportsRunInTerminal = false;
         this.pendingClientRequests = new Map();
-        this.pendingLaunchRequest = null;
         this.inferiorTerminalSession = null;
     }
 
@@ -664,14 +663,6 @@ class FreeBasicGdbAdapter {
         try {
             await this[handlerName](message, message.arguments || {});
         } catch (error) {
-            if (message.command === "launch" && this.pendingLaunchRequest === message)
-                this.pendingLaunchRequest = null;
-
-            if (message.command === "configurationDone" && this.pendingLaunchRequest) {
-                this.sendErrorResponse(this.pendingLaunchRequest, error);
-                this.pendingLaunchRequest = null;
-            }
-
             this.sendErrorResponse(message, error);
         }
     }
@@ -727,7 +718,6 @@ class FreeBasicGdbAdapter {
         validateLaunchArguments(args);
         this.terminatedSent = false;
         this.exitedSent = false;
-        this.pendingLaunchRequest = request;
 
         if (!args.skipBuild) {
             this.sendOutput("console", `Compiling ${args.sourceFile}\n`);
@@ -743,6 +733,7 @@ class FreeBasicGdbAdapter {
         this.launchArguments = args;
         this.launched = true;
         this.sendEvent("initialized");
+        this.sendResponse(request);
     }
 
     async configurationDoneRequest(request) {
@@ -754,11 +745,6 @@ class FreeBasicGdbAdapter {
             await this.gdb.sendCommand("-exec-run");
 
         this.sendResponse(request);
-
-        if (this.pendingLaunchRequest) {
-            this.sendResponse(this.pendingLaunchRequest);
-            this.pendingLaunchRequest = null;
-        }
     }
 
     async setBreakpointsRequest(request, args) {

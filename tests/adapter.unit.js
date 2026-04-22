@@ -231,7 +231,7 @@ async function testMapStopReasonAndExpandableValueHelpers() {
     assert.strictEqual(testApi.shouldTryExpandValue("plain"), false);
 }
 
-async function testLaunchResponseWaitsForConfigurationDone() {
+async function testLaunchResponseIsSentBeforeConfigurationDone() {
     const sentMessages = [];
     const connection = {
         send(message) {
@@ -284,7 +284,7 @@ async function testLaunchResponseWaitsForConfigurationDone() {
                                     message.type === "response" &&
                                     message.command === "launch"
                                 )),
-                                false
+                                true
                             );
                             assert.strictEqual(
                                 sentMessages.some((message) => (
@@ -310,13 +310,6 @@ async function testLaunchResponseWaitsForConfigurationDone() {
         sentMessages.some((message) => (
             message.type === "response" &&
             message.command === "configurationDone"
-        )),
-        true
-    );
-    assert.strictEqual(
-        sentMessages.some((message) => (
-            message.type === "response" &&
-            message.command === "launch"
         )),
         true
     );
@@ -457,7 +450,7 @@ module.exports = [
     testCompileProgramRejectsWithCompilerOutput,
     testGdbSessionStartWaitsForPromptAndSendsSetupCommands,
     testMapStopReasonAndExpandableValueHelpers,
-    testLaunchResponseWaitsForConfigurationDone,
+    testLaunchResponseIsSentBeforeConfigurationDone,
     testPrepareInferiorPresentationUsesRunInTerminalOnUnix,
     testPrepareInferiorPresentationUsesNewConsoleOnWindows,
     testGdbSessionRejectsPendingCommandsWhenDebuggerExits
