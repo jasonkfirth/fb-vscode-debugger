@@ -13,8 +13,8 @@ VS Code instead of a language that needs manual task wiring every time.
 - Builds the active `.bas` file with `fbc` by default.
 - Lets you override the compiler path when a platform-specific launcher such as
   `fbc.exe`, `fbc64`, `fbc32`, `fbc64.exe`, or `fbc32.exe` is preferred.
-- Launches the resulting program with GDB by default, with a macOS fallback to
-  Apple `lldb-dap` when unsigned GDB is blocked by the OS.
+- Launches the resulting program with GDB by default, with a run-only fallback
+  when GDB is missing or unusable.
 - Exposes breakpoints, continue, pause, stepping, stack frames, locals, and
   expression evaluation through the Debug Adapter Protocol.
 - Parses FreeBASIC compile errors into the Problems panel before debugger
@@ -24,11 +24,10 @@ VS Code instead of a language that needs manual task wiring every time.
 
 ## Platform support
 
-- Windows and Linux work with a normal `gdb` install.
-- On macOS, unsigned GDB is blocked by `taskgated`. When that happens the
-  extension first falls back to Apple's signed `lldb-dap` if it is available.
-  If no usable LLDB DAP install is present, the extension still launches the
-  program but without debugger features.
+- Windows, Linux, and macOS all use GDB for full debugger features.
+- If GDB is missing, or if macOS blocks an unsigned GDB through `taskgated`,
+  the extension still launches the program in a reduced run-only session
+  without debugger features.
 - The extension assumes `fbc` and `gdb` are available on `PATH`.
 - On Windows, compiler discovery prefers `fbc.exe` first, then falls back to
   `fbc64.exe` / `fbc32.exe` when needed.
@@ -42,17 +41,17 @@ VS Code instead of a language that needs manual task wiring every time.
 - If your setup uses a non-default compiler or debugger location, set
   `compilerPath` and `gdbPath` in `launch.json`.
 
-## macOS fallback behavior
+## Fallback behavior
 
-On macOS, the extension uses this order when you press `F5`:
+When you press `F5`, the extension uses this order:
 
 1. A usable `gdb`
-2. Apple `lldb-dap` if `gdb` exists but macOS blocks it because it is unsigned
-3. A run-only session if no signed debugger path is available
+2. A run-only session if GDB is missing
+3. On macOS, a run-only session if `gdb` exists but the OS blocks it because it is unsigned
 
-That final fallback still compiles and launches your program, but debugging
-features such as breakpoints, stepping, pause, stack inspection, and watches
-will be unavailable for that session.
+The fallback still compiles and launches your program, but debugging features
+such as breakpoints, stepping, pause, stack inspection, and watches will be
+unavailable for that session.
 
 ## GDB discovery
 
@@ -146,9 +145,8 @@ these in normal VS Code settings:
   be less complete than the mature C/C++ debugger extensions.
 - If `fbc` or `gdb` are not on `PATH`, point `compilerPath` and `gdbPath` at
   the exact executables.
-- If FreeBASIC or GDB is missing, the extension shows an error explaining how
-  to proceed: install the missing tool, put it on `PATH`, or set the matching
-  debugger setting explicitly.
-- On macOS, the best experience is still a properly codesigned GDB. If that is
-  not available, the extension will try Apple `lldb-dap` automatically and
-  only fall back to run-only mode when no signed debugger path is usable.
+- If FreeBASIC is missing, the extension stops and explains how to point
+  `compilerPath` at a real compiler.
+- If GDB is missing or unusable, the extension still builds and launches with
+  `F5`, but it warns that the session is running without debugger features.
+- On macOS, the best experience is still a properly codesigned GDB.

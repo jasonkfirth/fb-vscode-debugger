@@ -297,6 +297,15 @@ function getMacosUnsignedGdbFallbackMessage(gdbPath) {
     ].join(" ");
 }
 
+function getMissingGdbFallbackMessage(gdbPath) {
+    const resolvedPath = String(gdbPath || "gdb").trim() || "gdb";
+
+    return [
+        `Unable to find GDB at '${resolvedPath}'.`,
+        "The program will still launch when you press F5, but breakpoints, stepping, watches, and pause will be unavailable until GDB is installed or 'freebasic.debugger.gdbPath' points to it."
+    ].join(" ");
+}
+
 function resolveXcrunToolPath(toolName) {
     if (process.platform !== "darwin")
         return null;
@@ -333,20 +342,28 @@ function chooseLldbDapPath() {
     return resolveXcrunToolPath("lldb-dap");
 }
 
+function chooseDebugserverPath() {
+    if (process.platform !== "darwin")
+        return null;
+
+    const candidatePaths = [
+        "/Applications/Xcode.app/Contents/SharedFrameworks/LLDB.framework/Versions/A/Resources/debugserver",
+        "/Library/Developer/CommandLineTools/Library/PrivateFrameworks/LLDB.framework/Versions/A/Resources/debugserver"
+    ];
+
+    for (const candidatePath of candidatePaths) {
+        if (fileExists(candidatePath))
+            return candidatePath;
+    }
+
+    return resolveXcrunToolPath("debugserver");
+}
+
 function selectMacosDebuggerFallback(gdbPath) {
     const fallbackMessage = getMacosUnsignedGdbFallbackMessage(gdbPath);
 
     if (!fallbackMessage)
         return null;
-
-    const lldbDapPath = chooseLldbDapPath();
-
-    if (lldbDapPath) {
-        return {
-            kind: "lldb-dap",
-            lldbDapPath
-        };
-    }
 
     return {
         kind: "run-only",
@@ -985,20 +1002,24 @@ class FreeBasicConfigurationProvider {
         }
 
         if (!fileExistsOrCommand(resolvedConfiguration.gdbPath)) {
+            const fallbackMessage = getMissingGdbFallbackMessage(resolvedConfiguration.gdbPath);
+
             appendTraceLine(
                 traceFilePath,
                 `resolveWithSubstitutedVariables gdb-missing ${resolvedConfiguration.gdbPath}`
             );
-            vscode.window.showErrorMessage(
-                "Unable to find GDB. Install it with your normal toolchain, put it on PATH, or set 'freebasic.debugger.gdbPath' or 'gdbPath' to the debugger executable."
+            vscode.window.showErrorMessage(fallbackMessage);
+            resolvedConfiguration.runWithoutDebugger = true;
+            resolvedConfiguration.runWithoutDebuggerMessage = fallbackMessage;
+            appendTraceLine(
+                traceFilePath,
+                "resolveWithSubstitutedVariables run-without-debugger missing-gdb"
             );
-
-            return undefined;
         }
 
         const macosFallback = selectMacosDebuggerFallback(resolvedConfiguration.gdbPath);
 
-        if (macosFallback) {
+        if (macosFallback && !resolvedConfiguration.runWithoutDebugger) {
 
             appendTraceLine(
                 traceFilePath,
@@ -1017,7 +1038,8 @@ class FreeBasicConfigurationProvider {
                 );
             } else {
                 vscode.window.showErrorMessage(macosFallback.message);
-                resolvedConfiguration.unsignedMacosGdbFallback = true;
+                resolvedConfiguration.runWithoutDebugger = true;
+                resolvedConfiguration.runWithoutDebuggerMessage = macosFallback.message;
                 appendTraceLine(
                     traceFilePath,
                     "resolveWithSubstitutedVariables macos-run-without-debugger"
@@ -1188,8 +1210,10 @@ module.exports = {
         resolveExecutablePath,
         getMacosUnsignedGdbMessage,
         getMacosUnsignedGdbFallbackMessage,
+        getMissingGdbFallbackMessage,
         resolveXcrunToolPath,
         chooseLldbDapPath,
+        chooseDebugserverPath,
         selectMacosDebuggerFallback,
         chooseCompilerPath,
         getBundledGdbCandidates,

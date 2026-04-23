@@ -262,6 +262,27 @@ async function testGetMacosGdbSetupHintRecognizesTaskgatedFailure() {
     });
 }
 
+async function testShouldUseTerminalForRunOnlyLaunchDetectsGuiSubsystem() {
+    assert.strictEqual(
+        testApi.shouldUseTerminalForRunOnlyLaunch({
+            compilerArgs: ["-s", "gui"]
+        }),
+        false
+    );
+    assert.strictEqual(
+        testApi.shouldUseTerminalForRunOnlyLaunch({
+            compilerArgs: ["-sgui"]
+        }),
+        false
+    );
+    assert.strictEqual(
+        testApi.shouldUseTerminalForRunOnlyLaunch({
+            compilerArgs: []
+        }),
+        true
+    );
+}
+
 async function testLaunchResponseIsSentBeforeConfigurationDone() {
     const sentMessages = [];
     const connection = {
@@ -364,7 +385,7 @@ async function testRunOnlyFallbackSkipsGdbStartup() {
             startedGdb = true;
         },
         async () => {
-            await withTemporaryPlatform("darwin", async () => {
+            await withTemporaryPlatform("linux", async () => {
                 await adapter.launchRequest({
                     seq: 10,
                     command: "launch"
@@ -373,12 +394,13 @@ async function testRunOnlyFallbackSkipsGdbStartup() {
                     program: "demo",
                     cwd: process.cwd(),
                     compilerPath: "fbc",
-                    gdbPath: "/usr/local/bin/gdb",
+                    gdbPath: "/missing/gdb",
                     args: [],
                     env: {},
                     skipBuild: true,
                     stopAtEntry: false,
-                    unsignedMacosGdbFallback: true
+                    runWithoutDebugger: true,
+                    runWithoutDebuggerMessage: "Unable to find GDB at '/missing/gdb'. The program will still launch when you press F5."
                 });
             });
         }
@@ -398,7 +420,7 @@ async function testRunOnlyFallbackSkipsGdbStartup() {
             .filter((message) => message.type === "event" && message.event === "output")
             .map((message) => message.body.output)
             .join(""),
-        /without GDB/
+        /still launch when you press F5/i
     );
 }
 
@@ -487,6 +509,56 @@ async function testRunOnlyFallbackConfigurationDoneUsesRunInTerminal() {
             message.event === "terminated"
         )),
         true
+    );
+}
+
+async function testRunOnlyFallbackWindowedProgramSkipsRunInTerminal() {
+    const sentMessages = [];
+    const connection = {
+        send(message) {
+            sentMessages.push(message);
+        },
+        start() {}
+    };
+    const adapter = new testApi.FreeBasicGdbAdapter(connection);
+    let runInTerminalUsed = false;
+
+    adapter.clientSupportsRunInTerminal = true;
+    adapter.runWithoutDebugger = true;
+    adapter.launchArguments = {
+        cwd: process.cwd(),
+        console: "integratedTerminal",
+        program: "/tmp/demo-window",
+        args: [],
+        compilerArgs: ["-s", "gui"],
+        env: {}
+    };
+
+    await withPatchedMethod(cp, "spawn", () => createFakeSpawnProcess({
+        start(child) {
+            child.emit("exit", 0);
+        }
+    }), async () => {
+        adapter.sendClientRequest = async () => {
+            runInTerminalUsed = true;
+            return {};
+        };
+
+        await adapter.configurationDoneRequest({
+            seq: 12,
+            command: "configurationDone"
+        });
+
+        await new Promise((resolve) => setImmediate(resolve));
+    });
+
+    assert.strictEqual(runInTerminalUsed, false);
+    assert.match(
+        sentMessages
+            .filter((message) => message.type === "event" && message.event === "output")
+            .map((message) => message.body.output)
+            .join(""),
+        /windowed program directly/i
     );
 }
 
@@ -650,6 +722,37 @@ async function testAdapterAddsMacosGdbHintToErrors() {
     });
 }
 
+async function testRunOnlyFallbackBreakpointsUseGenericMessage() {
+    const sentMessages = [];
+    const connection = {
+        send(message) {
+            sentMessages.push(message);
+        },
+        start() {}
+    };
+    const adapter = new testApi.FreeBasicGdbAdapter(connection);
+
+    adapter.runWithoutDebugger = true;
+
+    await adapter.setBreakpointsRequest({
+        seq: 22,
+        command: "setBreakpoints"
+    }, {
+        source: {
+            path: "demo.bas"
+        },
+        breakpoints: [
+            { line: 12 }
+        ]
+    });
+
+    const response = sentMessages.find((message) => (
+        message.type === "response" && message.command === "setBreakpoints"
+    ));
+
+    assert.match(response.body.breakpoints[0].message, /without GDB/i);
+}
+
 module.exports = [
     testMiValueParserParsesTupleAndListValues,
     testParseMiLineHandlesResultAndConsoleRecords,
@@ -665,13 +768,16 @@ module.exports = [
     testGdbSessionStartWaitsForPromptAndSendsSetupCommands,
     testMapStopReasonAndExpandableValueHelpers,
     testGetMacosGdbSetupHintRecognizesTaskgatedFailure,
+    testShouldUseTerminalForRunOnlyLaunchDetectsGuiSubsystem,
     testLaunchResponseIsSentBeforeConfigurationDone,
     testRunOnlyFallbackSkipsGdbStartup,
     testRunOnlyFallbackConfigurationDoneUsesRunInTerminal,
+    testRunOnlyFallbackWindowedProgramSkipsRunInTerminal,
     testPrepareInferiorPresentationUsesRunInTerminalOnUnix,
     testPrepareInferiorPresentationUsesNewConsoleOnWindows,
     testGdbSessionRejectsPendingCommandsWhenDebuggerExits,
-    testAdapterAddsMacosGdbHintToErrors
+    testAdapterAddsMacosGdbHintToErrors,
+    testRunOnlyFallbackBreakpointsUseGenericMessage
 ];
 
 /* end of tests/adapter.unit.js */

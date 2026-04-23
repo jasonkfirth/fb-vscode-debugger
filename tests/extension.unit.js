@@ -120,6 +120,19 @@ async function testChooseLldbDapPathPrefersKnownMacosInstall() {
     });
 }
 
+async function testChooseDebugserverPathPrefersKnownMacosInstall() {
+    await withTemporaryPlatform("darwin", async () => {
+        await withPatchedMethod(fs, "existsSync", (filePath) => (
+            String(filePath) === "/Applications/Xcode.app/Contents/SharedFrameworks/LLDB.framework/Versions/A/Resources/debugserver"
+        ), async () => {
+            assert.strictEqual(
+                testApi.chooseDebugserverPath(),
+                "/Applications/Xcode.app/Contents/SharedFrameworks/LLDB.framework/Versions/A/Resources/debugserver"
+            );
+        });
+    });
+}
+
 async function testCreateDefaultConfigurationUsesSettingsAndPlatformSuffix() {
     vscode.__reset();
     vscode.__state.settings["freebasic.debugger"] = {
@@ -314,13 +327,14 @@ async function testProviderStopsDebuggingOnCompileFailure() {
     });
 }
 
-async function testSelectMacosDebuggerFallbackPrefersLldbDap() {
+async function testSelectMacosDebuggerFallbackUsesRunOnlyEvenWhenLldbToolsExist() {
     await withTemporaryPlatform("darwin", async () => {
         await withPatchedMethod(fs, "existsSync", (filePath) => {
             const normalized = String(filePath);
 
             return normalized === "/usr/local/bin/gdb" ||
-                normalized === "/Library/Developer/CommandLineTools/usr/bin/lldb-dap";
+                normalized === "/Library/Developer/CommandLineTools/usr/bin/lldb-dap" ||
+                normalized === "/Applications/Xcode.app/Contents/SharedFrameworks/LLDB.framework/Versions/A/Resources/debugserver";
         }, async () => {
             await withPatchedMethod(cp, "spawnSync", (command, args) => {
                 if (command === "codesign") {
@@ -335,19 +349,20 @@ async function testSelectMacosDebuggerFallbackPrefersLldbDap() {
             }, async () => {
                 const result = testApi.selectMacosDebuggerFallback("/usr/local/bin/gdb");
 
-                assert.strictEqual(result.kind, "lldb-dap");
-                assert.strictEqual(result.lldbDapPath, "/Library/Developer/CommandLineTools/usr/bin/lldb-dap");
+                assert.strictEqual(result.kind, "run-only");
+                assert.match(result.message, /reduced-functionality session/i);
             });
         });
     });
 }
 
-async function testSelectMacosDebuggerFallbackUsesRunOnlyWhenLldbDapMissing() {
+async function testSelectMacosDebuggerFallbackUsesRunOnlyWhenDebugserverMissing() {
     await withTemporaryPlatform("darwin", async () => {
         await withPatchedMethod(fs, "existsSync", (filePath) => {
             const normalized = String(filePath);
 
-            return normalized === "/usr/local/bin/gdb";
+            return normalized === "/usr/local/bin/gdb" ||
+                normalized === "/Library/Developer/CommandLineTools/usr/bin/lldb-dap";
         }, async () => {
             await withPatchedMethod(cp, "spawnSync", (command, args) => {
                 if (command === "codesign") {
@@ -366,12 +381,104 @@ async function testSelectMacosDebuggerFallbackUsesRunOnlyWhenLldbDapMissing() {
                     };
                 }
 
+                if (command === "xcrun" && args[0] === "--find" && args[1] === "debugserver") {
+                    return {
+                        status: 1,
+                        stdout: "",
+                        stderr: "not found\n"
+                    };
+                }
+
                 assert.fail(`Unexpected spawnSync command: ${command} ${args.join(" ")}`);
             }, async () => {
                 const result = testApi.selectMacosDebuggerFallback("/usr/local/bin/gdb");
 
                 assert.strictEqual(result.kind, "run-only");
                 assert.match(result.message, /reduced-functionality session/i);
+            });
+        });
+    });
+}
+
+async function testGetMissingGdbFallbackMessageExplainsRunOnlyMode() {
+    const message = testApi.getMissingGdbFallbackMessage("gdb");
+
+    assert.match(message, /Unable to find GDB/i);
+    assert.match(message, /still launch when you press F5/i);
+    assert.match(message, /breakpoints, stepping, watches, and pause/i);
+}
+
+async function testProviderFallsBackToRunOnlyWhenGdbMissingOnLinux() {
+    vscode.__reset();
+    const diagnosticCollection = vscode.languages.createDiagnosticCollection("freebasic");
+    const outputChannel = vscode.window.createOutputChannel("test");
+    const provider = new testApi.FreeBasicConfigurationProvider(diagnosticCollection, outputChannel);
+
+    await withTemporaryPlatform("linux", async () => {
+        await withPatchedMethod(fs, "existsSync", (filePath) => (
+            String(filePath) === "/usr/bin/fbc" || String(filePath) === "/work/demo"
+        ), async () => {
+            await withPatchedMethod(cp, "spawn", () => createFakeSpawnProcess({
+                start(child) {
+                    child.emit("exit", 0);
+                }
+            }), async () => {
+                const result = await provider.resolveDebugConfigurationWithSubstitutedVariables(
+                    undefined,
+                    {
+                        type: "freebasic-gdb",
+                        request: "launch",
+                        sourceFile: "/work/demo.bas",
+                        cwd: "/work",
+                        program: "/work/demo",
+                        compilerPath: "/usr/bin/fbc",
+                        gdbPath: "/missing/gdb"
+                    }
+                );
+
+                assert.strictEqual(result.runWithoutDebugger, true);
+                assert.match(result.runWithoutDebuggerMessage, /Unable to find GDB/i);
+                assert.strictEqual(result.skipBuild, true);
+                assert.match(vscode.__state.messages.join("\n"), /still launch when you press F5/i);
+            });
+        });
+    });
+}
+
+async function testProviderFallsBackToRunOnlyWhenGdbMissingOnWindows() {
+    vscode.__reset();
+    const diagnosticCollection = vscode.languages.createDiagnosticCollection("freebasic");
+    const outputChannel = vscode.window.createOutputChannel("test");
+    const provider = new testApi.FreeBasicConfigurationProvider(diagnosticCollection, outputChannel);
+
+    await withTemporaryPlatform("win32", async () => {
+        await withPatchedMethod(fs, "existsSync", (filePath) => {
+            const normalized = String(filePath).toLowerCase();
+
+            return normalized === "c:/freebasic/fbc.exe" || normalized === "c:/proj/demo.exe";
+        }, async () => {
+            await withPatchedMethod(cp, "spawn", () => createFakeSpawnProcess({
+                start(child) {
+                    child.emit("exit", 0);
+                }
+            }), async () => {
+                const result = await provider.resolveDebugConfigurationWithSubstitutedVariables(
+                    undefined,
+                    {
+                        type: "freebasic-gdb",
+                        request: "launch",
+                        sourceFile: "C:/proj/demo.bas",
+                        cwd: "C:/proj",
+                        program: "C:/proj/demo.exe",
+                        compilerPath: "C:/freebasic/fbc.exe",
+                        gdbPath: "C:/missing/gdb.exe"
+                    }
+                );
+
+                assert.strictEqual(result.runWithoutDebugger, true);
+                assert.match(result.runWithoutDebuggerMessage, /Unable to find GDB/i);
+                assert.strictEqual(result.skipBuild, true);
+                assert.match(vscode.__state.messages.join("\n"), /still launch when you press F5/i);
             });
         });
     });
@@ -384,6 +491,7 @@ module.exports = [
     testChooseGdbPathPrefersKnownWindowsInstall,
     testGetMacosUnsignedGdbMessageDetectsUnsignedBinary,
     testChooseLldbDapPathPrefersKnownMacosInstall,
+    testChooseDebugserverPathPrefersKnownMacosInstall,
     testCreateDefaultConfigurationUsesSettingsAndPlatformSuffix,
     testConsoleHelpersChooseExpectedDefaults,
     testBuildConfigurationSkeletonKeepsVariableBasedSourceFile,
@@ -393,8 +501,11 @@ module.exports = [
     testCompileProgramBeforeDebugSuccessWritesOutput,
     testCompileProgramBeforeDebugFailurePublishesDiagnostics,
     testProviderStopsDebuggingOnCompileFailure,
-    testSelectMacosDebuggerFallbackPrefersLldbDap,
-    testSelectMacosDebuggerFallbackUsesRunOnlyWhenLldbDapMissing
+    testSelectMacosDebuggerFallbackUsesRunOnlyEvenWhenLldbToolsExist,
+    testSelectMacosDebuggerFallbackUsesRunOnlyWhenDebugserverMissing,
+    testGetMissingGdbFallbackMessageExplainsRunOnlyMode,
+    testProviderFallsBackToRunOnlyWhenGdbMissingOnLinux,
+    testProviderFallsBackToRunOnlyWhenGdbMissingOnWindows
 ];
 
 /* end of tests/extension.unit.js */

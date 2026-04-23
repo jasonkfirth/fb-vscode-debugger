@@ -2,7 +2,9 @@
 
 ## 1.20.1
 
-- Added a macOS fallback chain that now tries Apple's signed `lldb-dap` before dropping to a reduced run-only session when `gdb` is present but blocked by `taskgated`
+- Added cross-platform reduced-functionality fallback behavior so `F5` still launches the program when GDB is missing on Windows, Linux, or macOS
+- Added a macOS reduced-functionality fallback so `F5` still launches the program when `gdb` is present but blocked by `taskgated`
+- Backed out the experimental macOS `lldb-dap` fallback after real smoke testing showed it could still stall during launch on this machine
 - Improved the user-facing documentation so the README explains the macOS fallback behavior clearly, while development and packaging notes now live in `DEVELOP.md`
 - Rebuilt the release package for version `1.20.1`
 

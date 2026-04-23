@@ -23,7 +23,7 @@ runtime.
 
 - compiler lookup for `fbc`, `fbc.exe`, `fbc64.exe`, and Windows fallback paths
 - GDB lookup for bundled tools, common platform paths, and plain `gdb`
-- macOS fallback selection for unsigned `gdb`, Apple `lldb-dap`, and run-only mode
+- reduced-functionality fallback selection for missing GDB and macOS unsigned-GDB cases
 - default `F5` launch configuration generation
 - compiler argument construction, including `-g` and output naming
 - FreeBASIC compile success and compile failure handling

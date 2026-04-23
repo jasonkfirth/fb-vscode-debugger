@@ -687,7 +687,7 @@ class FreeBasicGdbAdapter {
     ensureDebuggerAvailable() {
         if (this.runWithoutDebugger) {
             throw new Error(
-                "This macOS session is running without a signed GDB, so debugger features are unavailable."
+                "This session is running without GDB debugger features, so breakpoints, stepping, watches, and pause are unavailable."
             );
         }
     }
@@ -768,7 +768,7 @@ class FreeBasicGdbAdapter {
         this.terminatedSent = false;
         this.exitedSent = false;
         this.reportedMacosGdbSetupHint = false;
-        this.runWithoutDebugger = Boolean(args.unsignedMacosGdbFallback);
+        this.runWithoutDebugger = Boolean(args.runWithoutDebugger || args.unsignedMacosGdbFallback);
         this.launchArguments = args;
 
         if (!args.skipBuild) {
@@ -777,7 +777,7 @@ class FreeBasicGdbAdapter {
         }
 
         if (this.runWithoutDebugger) {
-            this.sendOutput("console", `${getMacosReducedFunctionalityMessage(args.gdbPath)}\n`);
+            this.sendOutput("console", `${getReducedFunctionalityMessage(args)}\n`);
             this.sendOutput("console", `Launching ${args.program} without GDB\n`);
             this.launched = true;
             this.sendEvent("initialized");
@@ -824,7 +824,7 @@ class FreeBasicGdbAdapter {
                 breakpoints: requestedBreakpoints.map((breakpoint) => ({
                     verified: false,
                     line: Number(breakpoint.line),
-                    message: "Breakpoints are unavailable while macOS is running without a signed GDB."
+                    message: "Breakpoints are unavailable while this session is running without GDB."
                 }))
             });
             return;
@@ -1246,14 +1246,22 @@ class FreeBasicGdbAdapter {
 
     async launchWithoutDebugger() {
         const consoleKind = normalizeConsoleKind(this.launchArguments.console);
+        const launchNeedsTerminal = shouldUseTerminalForRunOnlyLaunch(this.launchArguments);
 
         this.onTargetRunning();
 
-        if (consoleKind === "internalConsole" || !this.clientSupportsRunInTerminal) {
+        if (consoleKind === "internalConsole" || !this.clientSupportsRunInTerminal || !launchNeedsTerminal) {
             if (consoleKind !== "internalConsole" && !this.clientSupportsRunInTerminal) {
                 this.sendOutput(
                     "console",
                     "The client does not support runInTerminal. Falling back to internal program I/O.\n"
+                );
+            }
+
+            if (launchNeedsTerminal === false) {
+                this.sendOutput(
+                    "console",
+                    "Launching this windowed program directly because it does not need a terminal.\n"
                 );
             }
 
@@ -1589,6 +1597,44 @@ function getMacosReducedFunctionalityMessage(gdbPath) {
     ].join(" ");
 }
 
+function getMissingGdbReducedFunctionalityMessage(gdbPath) {
+    const resolvedPath = String(gdbPath || "gdb").trim() || "gdb";
+
+    return [
+        `GDB was not found at '${resolvedPath}'.`,
+        "Running without debugger features for this session, so breakpoints, stepping, watches, and pause are unavailable."
+    ].join(" ");
+}
+
+function getReducedFunctionalityMessage(args) {
+    if (args && args.runWithoutDebuggerMessage)
+        return String(args.runWithoutDebuggerMessage);
+
+    const macosMessage = getMacosReducedFunctionalityMessage(args && args.gdbPath);
+
+    if (macosMessage)
+        return macosMessage;
+
+    return getMissingGdbReducedFunctionalityMessage(args && args.gdbPath);
+}
+
+function shouldUseTerminalForRunOnlyLaunch(args) {
+    const compilerArgs = Array.isArray(args && args.compilerArgs) ? args.compilerArgs : [];
+
+    for (let index = 0; index < compilerArgs.length; index++) {
+        const argument = String(compilerArgs[index] || "").trim().toLowerCase();
+        const nextArgument = String(compilerArgs[index + 1] || "").trim().toLowerCase();
+
+        if (argument === "-s" && nextArgument === "gui")
+            return false;
+
+        if (argument === "-sgui" || argument === "-s=gui")
+            return false;
+    }
+
+    return true;
+}
+
 function mergeEnvironment(customEnvironment) {
     const environment = Object.assign({}, process.env);
 
@@ -1819,6 +1865,9 @@ module.exports = {
         normalizeSourcePath,
         getMacosGdbSetupHint,
         getMacosReducedFunctionalityMessage,
+        getMissingGdbReducedFunctionalityMessage,
+        getReducedFunctionalityMessage,
+        shouldUseTerminalForRunOnlyLaunch,
         mergeEnvironment,
         toGdbPath,
         buildCompilerArguments,

@@ -90,6 +90,7 @@ const state = {
     messages: [],
     commands: [],
     settings: {},
+    isTrusted: true,
     diagnosticCollections: [],
     outputChannels: []
 };
@@ -128,6 +129,12 @@ const vscode = {
         }
     },
     workspace: {
+        get isTrusted() {
+            return state.isTrusted;
+        },
+        set isTrusted(value) {
+            state.isTrusted = Boolean(value);
+        },
         getConfiguration(section) {
             return createConfiguration(section);
         }
@@ -140,6 +147,9 @@ const vscode = {
             state.activeTextEditor = value;
         },
         showErrorMessage(message) {
+            state.messages.push(message);
+        },
+        showWarningMessage(message) {
             state.messages.push(message);
         },
         createOutputChannel(name) {
@@ -176,6 +186,7 @@ const vscode = {
         state.diagnosticCollections.length = 0;
         state.outputChannels.length = 0;
         state.settings = {};
+        state.isTrusted = true;
     }
 };
 
