@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.20.0
+
+- Changed the extension version to `1.20.0` to align with the companion `fb-vscode-language` package from the same publisher
+- Adopted the shared versioning scheme where the major and minor version match the FreeBASIC compiler line the extensions are based on, and the final digit is the package revision number
+- Improved macOS compiler discovery so the debugger can find `fbc` in common install locations such as `/opt/homebrew/bin`, `/usr/local/bin`, and `/opt/local/bin` even when VS Code is launched without a shell-populated `PATH`
+- Simplified the macOS and Unix helper terminal launch command by using `/bin/sh -c` instead of `/bin/sh -lc`, avoiding unnecessary login-shell startup behavior during `runInTerminal`
+- Added unit coverage for the macOS compiler lookup path and the Unix helper-terminal command shape so the macOS fixes stay protected
+- Verified the plugin on Windows, Linux, and macOS
+- Rebuilt the release package as part of this version update
+
 ## 0.1.2
 
 - Fixed a debug-adapter launch handshake deadlock where `configurationDone` could never arrive because the adapter was waiting too long to answer `launch`

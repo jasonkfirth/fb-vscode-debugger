@@ -2,7 +2,7 @@
   "name": "freebasic-native-debugger",
   "displayName": "FreeBASIC Native Debugger",
   "description": "Press F5 on a FreeBASIC source file, build it with fbc, and debug it with GDB.",
-  "version": "0.1.2",
+  "version": "1.20.0",
   "publisher": "SJZero",
   "license": "MIT",
   "icon": "assets/icon.png",

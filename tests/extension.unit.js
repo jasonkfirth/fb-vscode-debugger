@@ -70,6 +70,16 @@ async function testChooseCompilerPathPrefersWindowsFbcExe() {
     });
 }
 
+async function testChooseCompilerPathPrefersKnownMacosInstall() {
+    withTemporaryPlatform("darwin", () => {
+        withPatchedMethod(fs, "existsSync", (filePath) => (
+            String(filePath) === "/opt/homebrew/bin/fbc"
+        ), () => {
+            assert.strictEqual(testApi.chooseCompilerPath("auto"), "/opt/homebrew/bin/fbc");
+        });
+    });
+}
+
 async function testChooseGdbPathPrefersKnownWindowsInstall() {
     withTemporaryPlatform("win32", () => {
         withPatchedMethod(fs, "existsSync", (filePath) => /mingw64\\bin\\gdb\.exe$/i.test(String(filePath)), () => {
@@ -275,6 +285,7 @@ async function testProviderStopsDebuggingOnCompileFailure() {
 module.exports = [
     testCommandExistsFindsExecutableOnPath,
     testChooseCompilerPathPrefersWindowsFbcExe,
+    testChooseCompilerPathPrefersKnownMacosInstall,
     testChooseGdbPathPrefersKnownWindowsInstall,
     testCreateDefaultConfigurationUsesSettingsAndPlatformSuffix,
     testConsoleHelpersChooseExpectedDefaults,

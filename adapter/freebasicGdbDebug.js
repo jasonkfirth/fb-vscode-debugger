@@ -37,6 +37,8 @@ const toolchainPaths = require("../lib/toolchainPaths");
 /* ------------------------------------------------------------------------- */
 
 const WINDOWS_COMPILER_CANDIDATES = toolchainPaths.WINDOWS_COMPILER_CANDIDATES;
+const MACOS_COMPILER_CANDIDATES = toolchainPaths.MACOS_COMPILER_CANDIDATES;
+const LINUX_COMPILER_CANDIDATES = toolchainPaths.LINUX_COMPILER_CANDIDATES;
 const WINDOWS_GDB_CANDIDATES = toolchainPaths.WINDOWS_GDB_CANDIDATES;
 const MACOS_GDB_CANDIDATES = toolchainPaths.MACOS_GDB_CANDIDATES;
 const LINUX_GDB_CANDIDATES = toolchainPaths.LINUX_GDB_CANDIDATES;
@@ -1184,7 +1186,7 @@ async function createUnixInferiorTerminalSession(adapter, cwd, consoleKind) {
         kind: consoleKind === "externalTerminal" ? "external" : "integrated",
         title: "FreeBASIC Program",
         cwd,
-        args: ["/bin/sh", "-lc", shellCommand]
+        args: ["/bin/sh", "-c", shellCommand]
     });
 
     return {
@@ -1248,12 +1250,25 @@ function fileExists(filePath) {
 function resolveCompilerPath(compilerPath) {
     const requestedPath = String(compilerPath || "").trim();
     const isWindows = process.platform === "win32";
+    const isMacos = process.platform === "darwin";
 
     if (requestedPath.indexOf(path.sep) !== -1 || requestedPath.indexOf("/") !== -1)
         return requestedPath;
 
-    if (!isWindows)
+    if (!isWindows) {
+        const platformCandidates = isMacos
+            ? MACOS_COMPILER_CANDIDATES
+            : LINUX_COMPILER_CANDIDATES;
+
+        if (!requestedPath || requestedPath === "fbc") {
+            for (const candidatePath of platformCandidates) {
+                if (fileExists(candidatePath))
+                    return candidatePath;
+            }
+        }
+
         return requestedPath || "fbc";
+    }
 
     if (requestedPath.toLowerCase() === "fbc.exe" || requestedPath.toLowerCase() === "fbc") {
         for (const candidatePath of WINDOWS_COMPILER_CANDIDATES) {

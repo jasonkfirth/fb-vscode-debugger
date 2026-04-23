@@ -95,6 +95,17 @@ async function testResolveCompilerPathPrefersWindowsFbcExe() {
     });
 }
 
+async function testResolveCompilerPathPrefersKnownMacosInstall() {
+    withTemporaryPlatform("darwin", () => {
+        withPatchedMethod(fs, "existsSync", (filePath) => (
+            String(filePath) === "/opt/homebrew/bin/fbc"
+        ), () => {
+            assert.strictEqual(testApi.resolveCompilerPath("fbc"), "/opt/homebrew/bin/fbc");
+            assert.strictEqual(testApi.resolveCompilerPath(""), "/opt/homebrew/bin/fbc");
+        });
+    });
+}
+
 async function testResolveGdbPathFindsKnownWindowsInstall() {
     withTemporaryPlatform("win32", () => {
         withPatchedMethod(fs, "existsSync", (filePath) => /mingw64\\bin\\gdb\.exe$/i.test(String(filePath)), () => {
@@ -368,6 +379,7 @@ async function testPrepareInferiorPresentationUsesRunInTerminalOnUnix() {
     assert.strictEqual(clientRequests.length, 1);
     assert.strictEqual(clientRequests[0].command, "runInTerminal");
     assert.strictEqual(clientRequests[0].args.kind, "integrated");
+    assert.deepStrictEqual(clientRequests[0].args.args.slice(0, 2), ["/bin/sh", "-c"]);
     assert.strictEqual(sentCommands[0], "-inferior-tty-set \"/dev/pts/7\"");
     assert.strictEqual(adapter.inferiorTerminalSession.ttyPath, "/dev/pts/7");
 }
@@ -442,6 +454,7 @@ module.exports = [
     testParseMiLineHandlesResultAndConsoleRecords,
     testDapConnectionReadsAndWritesMessages,
     testResolveCompilerPathPrefersWindowsFbcExe,
+    testResolveCompilerPathPrefersKnownMacosInstall,
     testResolveGdbPathFindsKnownWindowsInstall,
     testNormalizeHelpersProduceExpectedShapes,
     testBuildCompilerArgumentsAddsDebugAndOutput,

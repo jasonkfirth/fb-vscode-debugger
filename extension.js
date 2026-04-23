@@ -37,6 +37,8 @@ const toolchainPaths = require("./lib/toolchainPaths");
 const FREEBASIC_LANGUAGE_ID = "freebasic";
 const DEBUG_TYPE = "freebasic-gdb";
 const WINDOWS_COMPILER_CANDIDATES = toolchainPaths.WINDOWS_COMPILER_CANDIDATES;
+const MACOS_COMPILER_CANDIDATES = toolchainPaths.MACOS_COMPILER_CANDIDATES;
+const LINUX_COMPILER_CANDIDATES = toolchainPaths.LINUX_COMPILER_CANDIDATES;
 const WINDOWS_GDB_CANDIDATES = toolchainPaths.WINDOWS_GDB_CANDIDATES;
 const MACOS_GDB_CANDIDATES = toolchainPaths.MACOS_GDB_CANDIDATES;
 const LINUX_GDB_CANDIDATES = toolchainPaths.LINUX_GDB_CANDIDATES;
@@ -216,6 +218,7 @@ function commandExists(commandName) {
 function chooseCompilerPath(arch) {
     const normalizedArch = (arch || "auto").toLowerCase();
     const isWindows = process.platform === "win32";
+    const isMacos = process.platform === "darwin";
     const candidateCompilers = [];
     const preferredCompilerNames = [];
 
@@ -253,6 +256,12 @@ function chooseCompilerPath(arch) {
 
             candidateCompilers.push(candidatePath);
         }
+    } else if (isMacos) {
+        for (const candidatePath of MACOS_COMPILER_CANDIDATES)
+            candidateCompilers.push(candidatePath);
+    } else {
+        for (const candidatePath of LINUX_COMPILER_CANDIDATES)
+            candidateCompilers.push(candidatePath);
     }
 
     for (const candidateName of preferredCompilerNames)
