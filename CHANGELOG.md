@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2
+
+- Fixed a debug-adapter launch handshake deadlock where `configurationDone` could never arrive because the adapter was waiting too long to answer `launch`
+- Fixed adapter startup reliability by launching the debug adapter explicitly from the extension host with an absolute script path instead of relying on the generic manifest runtime handoff
+- Added raw GDB smoke tests for console and windowed FreeBASIC programs so toolchain behavior can be validated outside VS Code
+- Added dedicated console and `gfxlib` smoke programs used to prove debugger launch behavior directly against `fbc` and GDB
+- Verified on Windows that console apps run under raw GDB, and that `gfxlib` windowed apps require GDB `new-console` handling to start reliably
+- Added a real VS Code extension-host smoke harness for both console and windowed FreeBASIC programs, with host-side and adapter-side trace logging for launch failures
+- Verified on Windows that both smoke scenarios now start through the extension itself, not just under raw GDB
+
 ## 0.1.1
 
 - Fixed debugger launch sequencing so the target starts after breakpoint configuration instead of stalling in a half-started GDB session

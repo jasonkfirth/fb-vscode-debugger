@@ -37,7 +37,7 @@ This creates a `.vsix` package in the repository root.
 ## Install the packaged extension locally
 
 ```powershell
-code --install-extension .\freebasic-native-debugger-0.1.1.vsix --force
+code --install-extension .\freebasic-native-debugger-0.1.2.vsix --force
 ```
 
 ## Publish to the Marketplace

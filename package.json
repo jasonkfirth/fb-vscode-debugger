@@ -2,13 +2,23 @@
   "name": "freebasic-native-debugger",
   "displayName": "FreeBASIC Native Debugger",
   "description": "Press F5 on a FreeBASIC source file, build it with fbc, and debug it with GDB.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "SJZero",
   "license": "MIT",
   "icon": "assets/icon.png",
   "extensionKind": [
     "workspace"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "The debugger runs FreeBASIC and GDB binaries from the local machine, so it is only available in trusted workspaces."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "The debugger requires a local filesystem and local native toolchain processes."
+    }
+  },
   "engines": {
     "vscode": "^1.85.0"
   },

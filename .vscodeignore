@@ -1,6 +1,7 @@
 .git/**
 .test-extensions/**
 .test-user-data/**
+.smoke-vscode/**
 .vsix-build/**
 .vsix-build-stage2/**
 .vsix-build-stage3/**

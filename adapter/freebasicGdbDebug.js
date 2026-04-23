@@ -1502,11 +1502,41 @@ function traceAdapter(message) {
     }
 }
 
+function getCrashLogPath() {
+    return path.join(os.tmpdir(), "freebasic-native-debugger-adapter-crash.log");
+}
+
+function appendCrashLogLine(line) {
+    try {
+        fs.appendFileSync(
+            getCrashLogPath(),
+            `${new Date().toISOString()} ${line}\n`,
+            "utf8"
+        );
+    } catch (_error) {
+        /*
+            Crash logging is best-effort only. If the filesystem write fails,
+            the original adapter failure should still propagate normally.
+        */
+    }
+}
+
+process.on("uncaughtException", (error) => {
+    appendCrashLogLine(`uncaughtException ${error && error.stack ? error.stack : String(error)}`);
+    process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+    appendCrashLogLine(`unhandledRejection ${reason && reason.stack ? reason.stack : String(reason)}`);
+    process.exit(1);
+});
+
 /* ------------------------------------------------------------------------- */
 /* Adapter entry point                                                       */
 /* ------------------------------------------------------------------------- */
 
 if (require.main === module) {
+    appendCrashLogLine("adapter-process-start");
     const connection = new DapConnection(process.stdin, process.stdout);
     const adapter = new FreeBasicGdbAdapter(connection);
 
@@ -1543,7 +1573,9 @@ module.exports = {
         extractExitCode,
         shouldTryExpandValue,
         getTraceLogPath,
-        traceAdapter
+        traceAdapter,
+        getCrashLogPath,
+        appendCrashLogLine
     }
 };
 

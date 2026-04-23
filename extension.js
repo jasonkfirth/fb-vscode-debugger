@@ -43,6 +43,8 @@ const LINUX_GDB_CANDIDATES = toolchainPaths.LINUX_GDB_CANDIDATES;
 const FREEBASIC_DIAGNOSTIC_SOURCE = "FreeBASIC";
 const FREEBASIC_SETTINGS_SECTION = "freebasic.debugger";
 const FREEBASIC_OUTPUT_CHANNEL_NAME = "FreeBASIC Debugger";
+const TRUSTED_WORKSPACE_ERROR =
+    "FreeBASIC debugging is only available in a trusted workspace because the extension launches local compiler and debugger executables.";
 const VALID_CONSOLE_KINDS = [
     "platformDefault",
     "internalConsole",
@@ -112,6 +114,76 @@ function fileExists(filePath) {
     } catch (_error) {
         return false;
     }
+}
+
+function appendTraceLine(traceFilePath, line) {
+    if (!traceFilePath)
+        return;
+
+    try {
+        fs.appendFileSync(
+            traceFilePath,
+            `${new Date().toISOString()} ${line}\n`,
+            "utf8"
+        );
+    } catch (_error) {
+        /*
+            Session tracing is diagnostic-only. It must never interfere with
+            launching the debugger or compiling the program.
+        */
+    }
+}
+
+function getSessionTraceFilePath(session) {
+    const environment = session &&
+        session.configuration &&
+        session.configuration.env;
+
+    if (!environment)
+        return "";
+
+    if (environment.FREEBASIC_DEBUG_SESSION_LOG)
+        return String(environment.FREEBASIC_DEBUG_SESSION_LOG).trim();
+
+    return "";
+}
+
+function getConfigurationTraceFilePath(configuration) {
+    const environment = configuration && configuration.env;
+
+    if (!environment)
+        return "";
+
+    if (environment.FREEBASIC_DEBUG_HOST_LOG)
+        return String(environment.FREEBASIC_DEBUG_HOST_LOG).trim();
+
+    return "";
+}
+
+function summarizeTrackedMessage(message) {
+    if (!message)
+        return "<empty>";
+
+    if (message.type === "event")
+        return `event:${message.event}`;
+
+    if (message.type === "request")
+        return `request:${message.command}`;
+
+    if (message.type === "response") {
+        const successText = message.success === false ? "error" : "ok";
+        return `response:${message.command}:${successText}`;
+    }
+
+    return String(message.type || "<unknown>");
+}
+
+function ensureTrustedWorkspace() {
+    if (vscode.workspace.isTrusted)
+        return true;
+
+    vscode.window.showErrorMessage(TRUSTED_WORKSPACE_ERROR);
+    return false;
 }
 
 function commandExists(commandName) {
@@ -374,7 +446,7 @@ function mergeEnvironment(customEnvironment) {
     return environment;
 }
 
-function compileProgramBeforeDebug(configuration, diagnosticCollection, outputChannel) {
+function compileProgramBeforeDebug(configuration, diagnosticCollection, outputChannel, traceFilePath) {
     return new Promise((resolve, reject) => {
         const compilerArguments = buildCompilerArguments(configuration);
         const launchDescription = [configuration.compilerPath]
@@ -382,6 +454,7 @@ function compileProgramBeforeDebug(configuration, diagnosticCollection, outputCh
             .join(" ");
         let settled = false;
 
+        appendTraceLine(traceFilePath, `compile-start ${launchDescription}`);
         outputChannel.appendLine(`Compiling: ${launchDescription}`);
 
         const compiler = cp.spawn(configuration.compilerPath, compilerArguments, {
@@ -406,6 +479,7 @@ function compileProgramBeforeDebug(configuration, diagnosticCollection, outputCh
                 return;
 
             settled = true;
+            appendTraceLine(traceFilePath, `compile-spawn-error ${error.message}`);
             outputChannel.appendLine(`Compiler start failed: ${error.message}`);
             reject(new Error(`Unable to start FreeBASIC compiler: ${error.message}`));
         });
@@ -423,6 +497,8 @@ function compileProgramBeforeDebug(configuration, diagnosticCollection, outputCh
             if (code !== 0) {
                 const diagnosticsByFile = parseCompilerDiagnostics(compilerOutput);
 
+                appendTraceLine(traceFilePath, `compile-failed exit=${code}`);
+
                 if (diagnosticsByFile.size > 0)
                     applyCompilerDiagnostics(diagnosticCollection, diagnosticsByFile);
 
@@ -438,6 +514,10 @@ function compileProgramBeforeDebug(configuration, diagnosticCollection, outputCh
             }
 
             if (!fileExists(configuration.program)) {
+                appendTraceLine(
+                    traceFilePath,
+                    `compile-missing-output ${configuration.program}`
+                );
                 outputChannel.appendLine(
                     `Compiler completed but output program was not created: ${configuration.program}`
                 );
@@ -447,6 +527,7 @@ function compileProgramBeforeDebug(configuration, diagnosticCollection, outputCh
                 return;
             }
 
+            appendTraceLine(traceFilePath, `compile-succeeded ${configuration.program}`);
             outputChannel.appendLine(`Compilation succeeded: ${configuration.program}`);
             resolve();
         });
@@ -459,12 +540,30 @@ function createDebugAdapterTrackerFactory(diagnosticCollection, outputChannel) {
             if (session.type !== DEBUG_TYPE)
                 return undefined;
 
+            const traceFilePath = getSessionTraceFilePath(session);
+
             return {
                 onWillStartSession() {
                     clearDiagnosticsForSource(diagnosticCollection, session.configuration.sourceFile);
+                    appendTraceLine(
+                        traceFilePath,
+                        `session-start trusted=${vscode.workspace.isTrusted} source=${session.configuration.sourceFile || ""}`
+                    );
+                },
+
+                onWillReceiveMessage(message) {
+                    appendTraceLine(
+                        traceFilePath,
+                        `client-to-adapter ${summarizeTrackedMessage(message)}`
+                    );
                 },
 
                 onDidSendMessage(message) {
+                    appendTraceLine(
+                        traceFilePath,
+                        `adapter-to-client ${summarizeTrackedMessage(message)}`
+                    );
+
                     if (!message ||
                         message.type !== "response" ||
                         message.command !== "launch" ||
@@ -481,6 +580,24 @@ function createDebugAdapterTrackerFactory(diagnosticCollection, outputChannel) {
                         return;
 
                     applyCompilerDiagnostics(diagnosticCollection, diagnosticsByFile);
+                },
+
+                onWillStopSession() {
+                    appendTraceLine(traceFilePath, "session-stop-requested");
+                },
+
+                onError(error) {
+                    appendTraceLine(
+                        traceFilePath,
+                        `session-error ${error && error.message ? error.message : String(error)}`
+                    );
+                },
+
+                onExit(code, signal) {
+                    appendTraceLine(
+                        traceFilePath,
+                        `session-exit code=${code} signal=${signal}`
+                    );
                 }
             };
         }
@@ -626,6 +743,17 @@ class FreeBasicConfigurationProvider {
 
     async resolveDebugConfiguration(_folder, configuration) {
         let resolvedConfiguration = configuration || {};
+        const traceFilePath = getConfigurationTraceFilePath(resolvedConfiguration);
+
+        appendTraceLine(
+            traceFilePath,
+            `resolveDebugConfiguration trusted=${vscode.workspace.isTrusted}`
+        );
+
+        if (!ensureTrustedWorkspace()) {
+            appendTraceLine(traceFilePath, "resolveDebugConfiguration rejected-untrusted");
+            return undefined;
+        }
 
         /*
             F5 may arrive with an empty debug configuration when the user
@@ -639,6 +767,7 @@ class FreeBasicConfigurationProvider {
             const activeSourceFile = getActiveSourceFile();
 
             if (!activeSourceFile) {
+                appendTraceLine(traceFilePath, "resolveDebugConfiguration missing-active-source");
                 vscode.window.showErrorMessage(
                     "Open a .bas file before starting a FreeBASIC debug session."
                 );
@@ -652,6 +781,10 @@ class FreeBasicConfigurationProvider {
         try {
             resolvedConfiguration = buildConfigurationSkeleton(resolvedConfiguration);
         } catch (error) {
+            appendTraceLine(
+                traceFilePath,
+                `resolveDebugConfiguration build-skeleton-error ${error.message || String(error)}`
+            );
             vscode.window.showErrorMessage(
                 error.message || String(error)
             );
@@ -659,20 +792,43 @@ class FreeBasicConfigurationProvider {
             return undefined;
         }
 
+        appendTraceLine(
+            traceFilePath,
+            `resolveDebugConfiguration resolved source=${resolvedConfiguration.sourceFile || ""}`
+        );
         return resolvedConfiguration;
     }
 
     async resolveDebugConfigurationWithSubstitutedVariables(_folder, configuration) {
         let resolvedConfiguration;
+        const traceFilePath = getConfigurationTraceFilePath(configuration);
+
+        appendTraceLine(
+            traceFilePath,
+            `resolveDebugConfigurationWithSubstitutedVariables trusted=${vscode.workspace.isTrusted}`
+        );
+
+        if (!ensureTrustedWorkspace()) {
+            appendTraceLine(traceFilePath, "resolveWithSubstitutedVariables rejected-untrusted");
+            return undefined;
+        }
 
         try {
             resolvedConfiguration = finalizeConfiguration(configuration);
         } catch (error) {
+            appendTraceLine(
+                traceFilePath,
+                `resolveWithSubstitutedVariables finalize-error ${error.message || String(error)}`
+            );
             vscode.window.showErrorMessage(error.message || String(error));
             return undefined;
         }
 
         if (!fileExistsOrCommand(resolvedConfiguration.compilerPath)) {
+            appendTraceLine(
+                traceFilePath,
+                `resolveWithSubstitutedVariables compiler-missing ${resolvedConfiguration.compilerPath}`
+            );
             vscode.window.showErrorMessage(
                 "Unable to find the FreeBASIC compiler. Install FreeBASIC, put 'fbc' or 'fbc.exe' on PATH, or set 'freebasic.debugger.compilerPath' or 'compilerPath' to a real compiler executable such as 'C:\\freebasic\\fbc.exe'."
             );
@@ -681,6 +837,10 @@ class FreeBasicConfigurationProvider {
         }
 
         if (!fileExistsOrCommand(resolvedConfiguration.gdbPath)) {
+            appendTraceLine(
+                traceFilePath,
+                `resolveWithSubstitutedVariables gdb-missing ${resolvedConfiguration.gdbPath}`
+            );
             vscode.window.showErrorMessage(
                 "Unable to find GDB. Install it with your normal toolchain, put it on PATH, or set 'freebasic.debugger.gdbPath' or 'gdbPath' to the debugger executable."
             );
@@ -689,14 +849,20 @@ class FreeBasicConfigurationProvider {
         }
 
         clearDiagnosticsForSource(this.diagnosticCollection, resolvedConfiguration.sourceFile);
+        appendTraceLine(
+            traceFilePath,
+            `resolveWithSubstitutedVariables compile-request source=${resolvedConfiguration.sourceFile} program=${resolvedConfiguration.program}`
+        );
 
         try {
             await compileProgramBeforeDebug(
                 resolvedConfiguration,
                 this.diagnosticCollection,
-                this.outputChannel
+                this.outputChannel,
+                traceFilePath
             );
         } catch (_error) {
+            appendTraceLine(traceFilePath, "resolveWithSubstitutedVariables compile-rejected");
             this.outputChannel.show(true);
             vscode.commands.executeCommand("workbench.actions.view.problems");
             vscode.window.showErrorMessage(
@@ -707,6 +873,7 @@ class FreeBasicConfigurationProvider {
         }
 
         resolvedConfiguration.skipBuild = true;
+        appendTraceLine(traceFilePath, "resolveWithSubstitutedVariables ready-for-launch");
         return resolvedConfiguration;
     }
 }
@@ -721,6 +888,41 @@ function fileExistsOrCommand(filePath) {
     return fileExists(filePath);
 }
 
+function createDebugAdapterDescriptorFactory() {
+    return {
+        createDebugAdapterDescriptor(session) {
+            const adapterPath = path.join(__dirname, "adapter", "freebasicGdbDebug.js");
+            const traceFilePath = getSessionTraceFilePath(session) ||
+                getConfigurationTraceFilePath(session && session.configuration);
+
+            if (!fileExists(adapterPath))
+                throw new Error(`FreeBASIC debug adapter is missing: ${adapterPath}`);
+
+            appendTraceLine(
+                traceFilePath,
+                `createDebugAdapterDescriptor runtime=${process.execPath} adapter=${adapterPath}`
+            );
+
+            /*
+                Launch the adapter explicitly from the extension host.
+
+                Relying on the manifest's generic "runtime: node" path can
+                vary across platforms and test environments. Using an absolute
+                adapter script path plus the current extension-host runtime
+                makes the launch path deterministic and avoids shell quoting
+                problems when the extension lives in a path with spaces.
+            */
+            return new vscode.DebugAdapterExecutable(
+                process.execPath,
+                [adapterPath],
+                {
+                    cwd: __dirname
+                }
+            );
+        }
+    };
+}
+
 /* ------------------------------------------------------------------------- */
 /* Extension activation                                                      */
 /* ------------------------------------------------------------------------- */
@@ -730,9 +932,16 @@ function activate(context) {
     const outputChannel = createOutputChannel();
     const provider = new FreeBasicConfigurationProvider(diagnosticCollection, outputChannel);
     const trackerFactory = createDebugAdapterTrackerFactory(diagnosticCollection, outputChannel);
+    const descriptorFactory = createDebugAdapterDescriptorFactory();
+
+    outputChannel.appendLine(`Extension host runtime: ${process.execPath}`);
 
     context.subscriptions.push(
         vscode.debug.registerDebugConfigurationProvider(DEBUG_TYPE, provider)
+    );
+
+    context.subscriptions.push(
+        vscode.debug.registerDebugAdapterDescriptorFactory(DEBUG_TYPE, descriptorFactory)
     );
 
     context.subscriptions.push(
@@ -744,6 +953,9 @@ function activate(context) {
 
     context.subscriptions.push(
         vscode.commands.registerCommand("freebasic.debugCurrentFile", async () => {
+            if (!ensureTrustedWorkspace())
+                return;
+
             const sourceFile = getActiveSourceFile();
 
             if (!sourceFile) {
