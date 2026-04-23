@@ -88,6 +88,38 @@ async function testChooseGdbPathPrefersKnownWindowsInstall() {
     });
 }
 
+async function testGetMacosUnsignedGdbMessageDetectsUnsignedBinary() {
+    await withTemporaryPlatform("darwin", async () => {
+        await withPatchedMethod(fs, "existsSync", (filePath) => (
+            String(filePath) === "/usr/local/bin/gdb"
+        ), async () => {
+            await withPatchedMethod(cp, "spawnSync", () => ({
+                status: 1,
+                stdout: "",
+                stderr: "/usr/local/bin/gdb: code object is not signed at all\n"
+            }), async () => {
+                const message = testApi.getMacosUnsignedGdbMessage("/usr/local/bin/gdb");
+
+                assert.match(message, /not codesigned/i);
+                assert.match(message, /freebasic\.debugger\.gdbPath/);
+            });
+        });
+    });
+}
+
+async function testChooseLldbDapPathPrefersKnownMacosInstall() {
+    await withTemporaryPlatform("darwin", async () => {
+        await withPatchedMethod(fs, "existsSync", (filePath) => (
+            String(filePath) === "/Library/Developer/CommandLineTools/usr/bin/lldb-dap"
+        ), async () => {
+            assert.strictEqual(
+                testApi.chooseLldbDapPath(),
+                "/Library/Developer/CommandLineTools/usr/bin/lldb-dap"
+            );
+        });
+    });
+}
+
 async function testCreateDefaultConfigurationUsesSettingsAndPlatformSuffix() {
     vscode.__reset();
     vscode.__state.settings["freebasic.debugger"] = {
@@ -282,11 +314,76 @@ async function testProviderStopsDebuggingOnCompileFailure() {
     });
 }
 
+async function testSelectMacosDebuggerFallbackPrefersLldbDap() {
+    await withTemporaryPlatform("darwin", async () => {
+        await withPatchedMethod(fs, "existsSync", (filePath) => {
+            const normalized = String(filePath);
+
+            return normalized === "/usr/local/bin/gdb" ||
+                normalized === "/Library/Developer/CommandLineTools/usr/bin/lldb-dap";
+        }, async () => {
+            await withPatchedMethod(cp, "spawnSync", (command, args) => {
+                if (command === "codesign") {
+                    return {
+                        status: 1,
+                        stdout: "",
+                        stderr: "/usr/local/bin/gdb: code object is not signed at all\n"
+                    };
+                }
+
+                assert.fail(`Unexpected spawnSync command: ${command} ${args.join(" ")}`);
+            }, async () => {
+                const result = testApi.selectMacosDebuggerFallback("/usr/local/bin/gdb");
+
+                assert.strictEqual(result.kind, "lldb-dap");
+                assert.strictEqual(result.lldbDapPath, "/Library/Developer/CommandLineTools/usr/bin/lldb-dap");
+            });
+        });
+    });
+}
+
+async function testSelectMacosDebuggerFallbackUsesRunOnlyWhenLldbDapMissing() {
+    await withTemporaryPlatform("darwin", async () => {
+        await withPatchedMethod(fs, "existsSync", (filePath) => {
+            const normalized = String(filePath);
+
+            return normalized === "/usr/local/bin/gdb";
+        }, async () => {
+            await withPatchedMethod(cp, "spawnSync", (command, args) => {
+                if (command === "codesign") {
+                    return {
+                        status: 1,
+                        stdout: "",
+                        stderr: "/usr/local/bin/gdb: code object is not signed at all\n"
+                    };
+                }
+
+                if (command === "xcrun" && args[0] === "--find" && args[1] === "lldb-dap") {
+                    return {
+                        status: 1,
+                        stdout: "",
+                        stderr: "not found\n"
+                    };
+                }
+
+                assert.fail(`Unexpected spawnSync command: ${command} ${args.join(" ")}`);
+            }, async () => {
+                const result = testApi.selectMacosDebuggerFallback("/usr/local/bin/gdb");
+
+                assert.strictEqual(result.kind, "run-only");
+                assert.match(result.message, /reduced-functionality session/i);
+            });
+        });
+    });
+}
+
 module.exports = [
     testCommandExistsFindsExecutableOnPath,
     testChooseCompilerPathPrefersWindowsFbcExe,
     testChooseCompilerPathPrefersKnownMacosInstall,
     testChooseGdbPathPrefersKnownWindowsInstall,
+    testGetMacosUnsignedGdbMessageDetectsUnsignedBinary,
+    testChooseLldbDapPathPrefersKnownMacosInstall,
     testCreateDefaultConfigurationUsesSettingsAndPlatformSuffix,
     testConsoleHelpersChooseExpectedDefaults,
     testBuildConfigurationSkeletonKeepsVariableBasedSourceFile,
@@ -295,7 +392,9 @@ module.exports = [
     testBuildCompilerArgumentsAddsDebugAndOutput,
     testCompileProgramBeforeDebugSuccessWritesOutput,
     testCompileProgramBeforeDebugFailurePublishesDiagnostics,
-    testProviderStopsDebuggingOnCompileFailure
+    testProviderStopsDebuggingOnCompileFailure,
+    testSelectMacosDebuggerFallbackPrefersLldbDap,
+    testSelectMacosDebuggerFallbackUsesRunOnlyWhenLldbDapMissing
 ];
 
 /* end of tests/extension.unit.js */

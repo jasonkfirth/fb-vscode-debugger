@@ -1,7 +1,15 @@
 # Changelog
 
+## 1.20.1
+
+- Added a macOS fallback chain that now tries Apple's signed `lldb-dap` before dropping to a reduced run-only session when `gdb` is present but blocked by `taskgated`
+- Improved the user-facing documentation so the README explains the macOS fallback behavior clearly, while development and packaging notes now live in `DEVELOP.md`
+- Rebuilt the release package for version `1.20.1`
+
 ## 1.20.0
 
+- Added a macOS debugger fallback chain for unsigned `gdb`: prefer Apple's signed `lldb-dap` when available, and otherwise still launch the compiled program in a reduced run-only session
+- Added clearer macOS diagnostics so unsigned `gdb` / `taskgated` failures explain both the codesigning requirement and the active fallback behavior
 - Changed the extension version to `1.20.0` to align with the companion `fb-vscode-language` package from the same publisher
 - Adopted the shared versioning scheme where the major and minor version match the FreeBASIC compiler line the extensions are based on, and the final digit is the package revision number
 - Improved macOS compiler discovery so the debugger can find `fbc` in common install locations such as `/opt/homebrew/bin`, `/usr/local/bin`, and `/opt/local/bin` even when VS Code is launched without a shell-populated `PATH`

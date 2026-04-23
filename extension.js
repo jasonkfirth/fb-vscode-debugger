@@ -215,6 +215,145 @@ function commandExists(commandName) {
     return false;
 }
 
+function resolveCommandOnPath(commandName) {
+    const pathValue = process.env.PATH || "";
+    const pathEntries = pathValue.split(path.delimiter).filter((entry) => Boolean(entry));
+    const candidateNames = [commandName];
+
+    if (process.platform === "win32") {
+        const extension = path.extname(commandName).toLowerCase();
+        const pathextEntries = (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM")
+            .split(";")
+            .filter((entry) => Boolean(entry));
+
+        if (!extension) {
+            for (const pathextEntry of pathextEntries)
+                candidateNames.push(`${commandName}${pathextEntry.toLowerCase()}`);
+        }
+    }
+
+    for (const pathEntry of pathEntries) {
+        for (const candidateName of candidateNames) {
+            const candidatePath = path.join(pathEntry, candidateName);
+
+            if (fileExists(candidatePath))
+                return candidatePath;
+        }
+    }
+
+    return null;
+}
+
+function resolveExecutablePath(filePath) {
+    if (!filePath)
+        return null;
+
+    if (filePath.indexOf(path.sep) !== -1 || filePath.indexOf("/") !== -1)
+        return filePath;
+
+    return resolveCommandOnPath(filePath);
+}
+
+function getMacosUnsignedGdbMessage(gdbPath) {
+    if (process.platform !== "darwin")
+        return null;
+
+    const resolvedPath = resolveExecutablePath(gdbPath);
+
+    if (!resolvedPath || !fileExists(resolvedPath))
+        return null;
+
+    const inspection = cp.spawnSync("codesign", ["-dv", "--verbose=4", resolvedPath], {
+        encoding: "utf8"
+    });
+
+    if (!inspection.error && inspection.status === 0)
+        return null;
+
+    const inspectionText = [
+        inspection.stdout || "",
+        inspection.stderr || "",
+        inspection.error ? inspection.error.message || String(inspection.error) : ""
+    ].join("\n");
+
+    if (!/not signed|code object is not signed|invalid signature/i.test(inspectionText))
+        return null;
+
+    return [
+        `The macOS debugger '${resolvedPath}' is not codesigned, so macOS taskgated will block it from controlling the debuggee.`,
+        "Codesign GDB with a trusted certificate and then point 'freebasic.debugger.gdbPath' or 'gdbPath' at that signed executable."
+    ].join(" ");
+}
+
+function getMacosUnsignedGdbFallbackMessage(gdbPath) {
+    const baseMessage = getMacosUnsignedGdbMessage(gdbPath);
+
+    if (!baseMessage)
+        return null;
+
+    return [
+        baseMessage,
+        "The program will still launch, but breakpoints, stepping, watches, and pause will be unavailable in this reduced-functionality session."
+    ].join(" ");
+}
+
+function resolveXcrunToolPath(toolName) {
+    if (process.platform !== "darwin")
+        return null;
+
+    const lookup = cp.spawnSync("xcrun", ["--find", toolName], {
+        encoding: "utf8"
+    });
+
+    if (lookup.error || lookup.status !== 0)
+        return null;
+
+    const resolvedPath = String(lookup.stdout || "").trim();
+
+    if (!resolvedPath || !fileExists(resolvedPath))
+        return null;
+
+    return resolvedPath;
+}
+
+function chooseLldbDapPath() {
+    if (process.platform !== "darwin")
+        return null;
+
+    const candidatePaths = [
+        "/Library/Developer/CommandLineTools/usr/bin/lldb-dap",
+        "/Applications/Xcode.app/Contents/Developer/usr/bin/lldb-dap"
+    ];
+
+    for (const candidatePath of candidatePaths) {
+        if (fileExists(candidatePath))
+            return candidatePath;
+    }
+
+    return resolveXcrunToolPath("lldb-dap");
+}
+
+function selectMacosDebuggerFallback(gdbPath) {
+    const fallbackMessage = getMacosUnsignedGdbFallbackMessage(gdbPath);
+
+    if (!fallbackMessage)
+        return null;
+
+    const lldbDapPath = chooseLldbDapPath();
+
+    if (lldbDapPath) {
+        return {
+            kind: "lldb-dap",
+            lldbDapPath
+        };
+    }
+
+    return {
+        kind: "run-only",
+        message: fallbackMessage
+    };
+}
+
 function chooseCompilerPath(arch) {
     const normalizedArch = (arch || "auto").toLowerCase();
     const isWindows = process.platform === "win32";
@@ -857,6 +996,35 @@ class FreeBasicConfigurationProvider {
             return undefined;
         }
 
+        const macosFallback = selectMacosDebuggerFallback(resolvedConfiguration.gdbPath);
+
+        if (macosFallback) {
+
+            appendTraceLine(
+                traceFilePath,
+                `resolveWithSubstitutedVariables macos-gdb-codesign ${resolvedConfiguration.gdbPath}`
+            );
+
+            if (macosFallback.kind === "lldb-dap") {
+                resolvedConfiguration.macosLldbDapPath = macosFallback.lldbDapPath;
+                resolvedConfiguration.stopOnEntry = Boolean(resolvedConfiguration.stopAtEntry);
+                this.outputChannel.appendLine(
+                    `Unsigned GDB detected on macOS. Falling back to Apple LLDB DAP: ${macosFallback.lldbDapPath}`
+                );
+                appendTraceLine(
+                    traceFilePath,
+                    `resolveWithSubstitutedVariables macos-lldb-dap-fallback ${macosFallback.lldbDapPath}`
+                );
+            } else {
+                vscode.window.showErrorMessage(macosFallback.message);
+                resolvedConfiguration.unsignedMacosGdbFallback = true;
+                appendTraceLine(
+                    traceFilePath,
+                    "resolveWithSubstitutedVariables macos-run-without-debugger"
+                );
+            }
+        }
+
         clearDiagnosticsForSource(this.diagnosticCollection, resolvedConfiguration.sourceFile);
         appendTraceLine(
             traceFilePath,
@@ -900,9 +1068,27 @@ function fileExistsOrCommand(filePath) {
 function createDebugAdapterDescriptorFactory() {
     return {
         createDebugAdapterDescriptor(session) {
+            const lldbDapPath = session &&
+                session.configuration &&
+                session.configuration.macosLldbDapPath;
             const adapterPath = path.join(__dirname, "adapter", "freebasicGdbDebug.js");
             const traceFilePath = getSessionTraceFilePath(session) ||
                 getConfigurationTraceFilePath(session && session.configuration);
+
+            if (lldbDapPath) {
+                appendTraceLine(
+                    traceFilePath,
+                    `createDebugAdapterDescriptor runtime=lldb-dap adapter=${lldbDapPath}`
+                );
+
+                return new vscode.DebugAdapterExecutable(
+                    lldbDapPath,
+                    [],
+                    {
+                        cwd: path.dirname(lldbDapPath)
+                    }
+                );
+            }
 
             if (!fileExists(adapterPath))
                 throw new Error(`FreeBASIC debug adapter is missing: ${adapterPath}`);
@@ -998,6 +1184,13 @@ module.exports = {
         FREEBASIC_OUTPUT_CHANNEL_NAME,
         fileExists,
         commandExists,
+        resolveCommandOnPath,
+        resolveExecutablePath,
+        getMacosUnsignedGdbMessage,
+        getMacosUnsignedGdbFallbackMessage,
+        resolveXcrunToolPath,
+        chooseLldbDapPath,
+        selectMacosDebuggerFallback,
         chooseCompilerPath,
         getBundledGdbCandidates,
         chooseGdbPath,

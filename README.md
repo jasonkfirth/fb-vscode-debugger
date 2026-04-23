@@ -3,9 +3,9 @@
 This is a native VS Code debugger for FreeBASIC.
 
 Press `F5` on a `.bas` file, the extension builds it with `fbc -g`,
-then starts the program under GDB. The goal is simple: make FreeBASIC feel like
-a normal Run and Debug language in VS Code instead of a language that needs
-manual task wiring every time.
+then starts the program under the available native debugger for your platform.
+The goal is simple: make FreeBASIC feel like a normal Run and Debug language in
+VS Code instead of a language that needs manual task wiring every time.
 
 ## What it does
 
@@ -13,7 +13,8 @@ manual task wiring every time.
 - Builds the active `.bas` file with `fbc` by default.
 - Lets you override the compiler path when a platform-specific launcher such as
   `fbc.exe`, `fbc64`, `fbc32`, `fbc64.exe`, or `fbc32.exe` is preferred.
-- Launches the resulting program with `gdb --interpreter=mi2`.
+- Launches the resulting program with GDB by default, with a macOS fallback to
+  Apple `lldb-dap` when unsigned GDB is blocked by the OS.
 - Exposes breakpoints, continue, pause, stepping, stack frames, locals, and
   expression evaluation through the Debug Adapter Protocol.
 - Parses FreeBASIC compile errors into the Problems panel before debugger
@@ -23,7 +24,11 @@ manual task wiring every time.
 
 ## Platform support
 
-- Windows, Linux, and macOS are supported.
+- Windows and Linux work with a normal `gdb` install.
+- On macOS, unsigned GDB is blocked by `taskgated`. When that happens the
+  extension first falls back to Apple's signed `lldb-dap` if it is available.
+  If no usable LLDB DAP install is present, the extension still launches the
+  program but without debugger features.
 - The extension assumes `fbc` and `gdb` are available on `PATH`.
 - On Windows, compiler discovery prefers `fbc.exe` first, then falls back to
   `fbc64.exe` / `fbc32.exe` when needed.
@@ -36,6 +41,18 @@ manual task wiring every time.
   the debuggee gets a real TTY.
 - If your setup uses a non-default compiler or debugger location, set
   `compilerPath` and `gdbPath` in `launch.json`.
+
+## macOS fallback behavior
+
+On macOS, the extension uses this order when you press `F5`:
+
+1. A usable `gdb`
+2. Apple `lldb-dap` if `gdb` exists but macOS blocks it because it is unsigned
+3. A run-only session if no signed debugger path is available
+
+That final fallback still compiles and launches your program, but debugging
+features such as breakpoints, stepping, pause, stack inspection, and watches
+will be unavailable for that session.
 
 ## GDB discovery
 
@@ -132,56 +149,6 @@ these in normal VS Code settings:
 - If FreeBASIC or GDB is missing, the extension shows an error explaining how
   to proceed: install the missing tool, put it on `PATH`, or set the matching
   debugger setting explicitly.
-
-## Release and packaging notes
-
-- The Marketplace package icon is built from the FreeBASIC horse artwork in
-  `assets/`.
-- Third-party attribution details are listed in `THIRD_PARTY_NOTICES.md`.
-- Packaging exclusions are controlled by `.vscodeignore`.
-- Marketplace-specific metadata can be filled in with
-  `package.marketplace.template.json`.
-- Exact packaging and publish commands are documented in `PUBLISHING.md`.
-
-## Development validation
-
-Run the unit harness from the extension folder:
-
-```powershell
-npm run test:unit
-```
-
-If `node` is not on `PATH`, you can still run the tests with VS Code's bundled
-runtime. That is how the test suite was validated during development.
-
-The exact command used here was:
-
-```powershell
-$env:ELECTRON_RUN_AS_NODE='1'; & 'C:\Users\admin\AppData\Local\Programs\Microsoft VS Code\Code.exe' 'C:\Nextcloud\FBXL 5\vscode\tests\run_unit_tests.js'
-```
-
-That run completed successfully on April 21, 2026 with `SUMMARY 22 tests passed`.
-
-## What was actually tested
-
-- compiler lookup for `fbc`, `fbc.exe`, `fbc64.exe`, and Windows fallback paths
-- GDB lookup for bundled tools, common platform paths, and plain `gdb`
-- default `F5` launch configuration generation
-- compiler argument construction, including `-g` and output naming
-- FreeBASIC compile success and compile failure handling
-- compiler error parsing into VS Code diagnostics
-- DAP message framing and parsing
-- GDB/MI record parsing
-- initial GDB prompt detection and startup command flow
-
-The unit harness files are in `tests/extension.unit.js` and
-`tests/adapter.unit.js`.
-
-## Marketplace preparation
-
-The repository includes the main files needed for Marketplace release work:
-
-- `package.json` for the working extension manifest
-- `package.marketplace.template.json` for publisher/repository metadata
-- `.vscodeignore` for package filtering
-- `PUBLISHING.md` for the exact `vsce` workflow
+- On macOS, the best experience is still a properly codesigned GDB. If that is
+  not available, the extension will try Apple `lldb-dap` automatically and
+  only fall back to run-only mode when no signed debugger path is usable.

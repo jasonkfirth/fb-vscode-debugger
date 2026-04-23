@@ -396,7 +396,12 @@ class GdbSession {
             this.rejectPendingCommands(new Error(`GDB failed to start: ${error.message}`));
         });
         this.process.stdout.on("data", (chunk) => this.handleStdout(chunk));
-        this.process.stderr.on("data", (chunk) => this.adapter.sendOutput("stderr", chunk.toString("utf8")));
+        this.process.stderr.on("data", (chunk) => {
+            const text = chunk.toString("utf8");
+
+            this.adapter.sendOutput("stderr", text);
+            this.adapter.maybeReportMacosDebuggerSetupIssue(text);
+        });
         this.process.on("exit", (code, signal) => this.handleExit(code, signal));
 
         this.readyPromise = this.waitForReadyPrompt();
@@ -598,6 +603,9 @@ class FreeBasicGdbAdapter {
         this.clientSupportsRunInTerminal = false;
         this.pendingClientRequests = new Map();
         this.inferiorTerminalSession = null;
+        this.reportedMacosGdbSetupHint = false;
+        this.runWithoutDebugger = false;
+        this.fallbackProgramProcess = null;
     }
 
     start() {
@@ -617,14 +625,16 @@ class FreeBasicGdbAdapter {
     }
 
     sendErrorResponse(request, error) {
-        traceAdapter(`response ${request.command} error: ${error.message || String(error)}`);
+        const message = this.formatErrorMessage(error);
+
+        traceAdapter(`response ${request.command} error: ${message}`);
         this.connection.send({
             seq: this.sequence++,
             type: "response",
             request_seq: request.seq,
             success: false,
             command: request.command,
-            message: error.message || String(error)
+            message
         });
     }
 
@@ -643,6 +653,43 @@ class FreeBasicGdbAdapter {
             category,
             output
         });
+    }
+
+    formatErrorMessage(error) {
+        const message = error && error.message ? error.message : String(error);
+        const macosHint = getMacosGdbSetupHint(
+            message,
+            this.launchArguments && this.launchArguments.gdbPath
+        );
+
+        if (!macosHint || message.indexOf(macosHint) !== -1)
+            return message;
+
+        return `${message} ${macosHint}`;
+    }
+
+    maybeReportMacosDebuggerSetupIssue(output) {
+        if (this.reportedMacosGdbSetupHint)
+            return;
+
+        const macosHint = getMacosGdbSetupHint(
+            output,
+            this.launchArguments && this.launchArguments.gdbPath
+        );
+
+        if (!macosHint)
+            return;
+
+        this.reportedMacosGdbSetupHint = true;
+        this.sendOutput("console", `${macosHint}\n`);
+    }
+
+    ensureDebuggerAvailable() {
+        if (this.runWithoutDebugger) {
+            throw new Error(
+                "This macOS session is running without a signed GDB, so debugger features are unavailable."
+            );
+        }
     }
 
     async handleMessage(message) {
@@ -720,10 +767,22 @@ class FreeBasicGdbAdapter {
         validateLaunchArguments(args);
         this.terminatedSent = false;
         this.exitedSent = false;
+        this.reportedMacosGdbSetupHint = false;
+        this.runWithoutDebugger = Boolean(args.unsignedMacosGdbFallback);
+        this.launchArguments = args;
 
         if (!args.skipBuild) {
             this.sendOutput("console", `Compiling ${args.sourceFile}\n`);
             await compileProgram(args);
+        }
+
+        if (this.runWithoutDebugger) {
+            this.sendOutput("console", `${getMacosReducedFunctionalityMessage(args.gdbPath)}\n`);
+            this.sendOutput("console", `Launching ${args.program} without GDB\n`);
+            this.launched = true;
+            this.sendEvent("initialized");
+            this.sendResponse(request);
+            return;
         }
 
         this.sendOutput("console", `Launching ${args.program} with GDB\n`);
@@ -731,14 +790,22 @@ class FreeBasicGdbAdapter {
         this.gdb = new GdbSession(this);
         await this.gdb.start(args);
         await this.prepareInferiorPresentation(args);
-
-        this.launchArguments = args;
         this.launched = true;
         this.sendEvent("initialized");
         this.sendResponse(request);
     }
 
     async configurationDoneRequest(request) {
+        if (this.runWithoutDebugger) {
+            this.sendResponse(request);
+            this.launchWithoutDebugger().catch((error) => {
+                this.sendOutput("stderr", `${error.message || String(error)}\n`);
+                this.sendExitedEvent(1);
+                this.sendTerminatedEvent();
+            });
+            return;
+        }
+
         ensureSession(this.gdb);
 
         if (this.launchArguments.stopAtEntry)
@@ -750,6 +817,19 @@ class FreeBasicGdbAdapter {
     }
 
     async setBreakpointsRequest(request, args) {
+        if (this.runWithoutDebugger) {
+            const requestedBreakpoints = Array.isArray(args.breakpoints) ? args.breakpoints : [];
+
+            this.sendResponse(request, {
+                breakpoints: requestedBreakpoints.map((breakpoint) => ({
+                    verified: false,
+                    line: Number(breakpoint.line),
+                    message: "Breakpoints are unavailable while macOS is running without a signed GDB."
+                }))
+            });
+            return;
+        }
+
         ensureSession(this.gdb);
 
         const sourcePath = normalizeSourcePath(args.source && args.source.path);
@@ -791,13 +871,14 @@ class FreeBasicGdbAdapter {
             threads: [
                 {
                     id: 1,
-                    name: "Main Thread"
+                    name: this.runWithoutDebugger ? "Program" : "Main Thread"
                 }
             ]
         });
     }
 
     async stackTraceRequest(request, args) {
+        this.ensureDebuggerAvailable();
         ensureSession(this.gdb);
 
         const response = await this.gdb.sendCommand("-stack-list-frames");
@@ -833,6 +914,7 @@ class FreeBasicGdbAdapter {
     }
 
     async scopesRequest(request, args) {
+        this.ensureDebuggerAvailable();
         ensureSession(this.gdb);
 
         const frameId = Number(args.frameId || 0);
@@ -854,6 +936,7 @@ class FreeBasicGdbAdapter {
     }
 
     async variablesRequest(request, args) {
+        this.ensureDebuggerAvailable();
         ensureSession(this.gdb);
 
         const handle = this.variableHandles.get(Number(args.variablesReference));
@@ -877,6 +960,7 @@ class FreeBasicGdbAdapter {
     }
 
     async continueRequest(request) {
+        this.ensureDebuggerAvailable();
         ensureSession(this.gdb);
         await this.gdb.sendCommand("-exec-continue");
         this.sendResponse(request, {
@@ -885,30 +969,35 @@ class FreeBasicGdbAdapter {
     }
 
     async nextRequest(request) {
+        this.ensureDebuggerAvailable();
         ensureSession(this.gdb);
         await this.gdb.sendCommand("-exec-next");
         this.sendResponse(request);
     }
 
     async stepInRequest(request) {
+        this.ensureDebuggerAvailable();
         ensureSession(this.gdb);
         await this.gdb.sendCommand("-exec-step");
         this.sendResponse(request);
     }
 
     async stepOutRequest(request) {
+        this.ensureDebuggerAvailable();
         ensureSession(this.gdb);
         await this.gdb.sendCommand("-exec-finish");
         this.sendResponse(request);
     }
 
     async pauseRequest(request) {
+        this.ensureDebuggerAvailable();
         ensureSession(this.gdb);
         await this.gdb.sendCommand("-exec-interrupt");
         this.sendResponse(request);
     }
 
     async evaluateRequest(request, args) {
+        this.ensureDebuggerAvailable();
         ensureSession(this.gdb);
 
         if (typeof args.frameId === "number")
@@ -944,6 +1033,17 @@ class FreeBasicGdbAdapter {
     }
 
     async disconnectRequest(request) {
+        if (this.fallbackProgramProcess && !this.fallbackProgramProcess.killed) {
+            try {
+                this.fallbackProgramProcess.kill();
+            } catch (_error) {
+                /*
+                    Best-effort only. The fallback process may already have
+                    exited by the time the user disconnects.
+                */
+            }
+        }
+
         if (this.gdb)
             await this.gdb.stop();
 
@@ -1143,6 +1243,80 @@ class FreeBasicGdbAdapter {
 
         this.inferiorTerminalSession = null;
     }
+
+    async launchWithoutDebugger() {
+        const consoleKind = normalizeConsoleKind(this.launchArguments.console);
+
+        this.onTargetRunning();
+
+        if (consoleKind === "internalConsole" || !this.clientSupportsRunInTerminal) {
+            if (consoleKind !== "internalConsole" && !this.clientSupportsRunInTerminal) {
+                this.sendOutput(
+                    "console",
+                    "The client does not support runInTerminal. Falling back to internal program I/O.\n"
+                );
+            }
+
+            await this.launchWithoutDebuggerInProcess();
+            return;
+        }
+
+        const fallbackSession = await createUnixRunFallbackSession(
+            this,
+            this.launchArguments.cwd,
+            consoleKind,
+            this.launchArguments.program,
+            this.launchArguments.args,
+            mergeEnvironment(this.launchArguments.env)
+        );
+
+        fallbackSession.exitCodePromise
+            .then((exitCode) => {
+                this.sendExitedEvent(exitCode);
+                this.sendTerminatedEvent();
+            })
+            .catch((error) => {
+                this.sendOutput("stderr", `${error.message || String(error)}\n`);
+                this.sendExitedEvent(1);
+                this.sendTerminatedEvent();
+            });
+    }
+
+    async launchWithoutDebuggerInProcess() {
+        await new Promise((resolve, reject) => {
+            const child = cp.spawn(
+                this.launchArguments.program,
+                Array.isArray(this.launchArguments.args) ? this.launchArguments.args : [],
+                {
+                    cwd: this.launchArguments.cwd,
+                    env: mergeEnvironment(this.launchArguments.env),
+                    stdio: ["ignore", "pipe", "pipe"]
+                }
+            );
+
+            this.fallbackProgramProcess = child;
+
+            child.stdout.on("data", (chunk) => {
+                this.sendOutput("stdout", chunk.toString("utf8"));
+            });
+
+            child.stderr.on("data", (chunk) => {
+                this.sendOutput("stderr", chunk.toString("utf8"));
+            });
+
+            child.on("error", (error) => {
+                this.fallbackProgramProcess = null;
+                reject(new Error(`Unable to start program: ${error.message}`));
+            });
+
+            child.on("exit", (code) => {
+                this.fallbackProgramProcess = null;
+                this.sendExitedEvent(Number(code || 0));
+                this.sendTerminatedEvent();
+                resolve();
+            });
+        });
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1192,6 +1366,41 @@ async function createUnixInferiorTerminalSession(adapter, cwd, consoleKind) {
     return {
         ttyPath: await waitForTextFile(ttyMarkerPath, 10000),
         exitMarkerPath
+    };
+}
+
+async function createUnixRunFallbackSession(
+    adapter,
+    cwd,
+    consoleKind,
+    programPath,
+    programArgs,
+    environment
+) {
+    const token = `${process.pid}-${Date.now()}-${Math.round(Math.random() * 100000)}`;
+    const exitMarkerPath = path.join(os.tmpdir(), `freebasic-debugger-run-exit-${token}.txt`);
+    const launchCommand = [programPath]
+        .concat(Array.isArray(programArgs) ? programArgs : [])
+        .map((argument) => `'${toPosixShellPath(argument)}'`)
+        .join(" ");
+    const shellCommand = [
+        `${launchCommand}`,
+        "status=$?",
+        `printf '%s\\n' \"$status\" > '${toPosixShellPath(exitMarkerPath)}'`,
+        "exit \"$status\""
+    ].join("; ");
+
+    await adapter.sendClientRequest("runInTerminal", {
+        kind: consoleKind === "externalTerminal" ? "external" : "integrated",
+        title: "FreeBASIC Program",
+        cwd,
+        env: environment,
+        args: ["/bin/sh", "-c", shellCommand]
+    });
+
+    return {
+        exitCodePromise: waitForTextFile(exitMarkerPath, 24 * 60 * 60 * 1000)
+            .then((text) => Number(text.trim() || 0))
     };
 }
 
@@ -1349,6 +1558,35 @@ function normalizeSourcePath(sourcePath) {
         throw new Error("Breakpoint request is missing the source path.");
 
     return toGdbPath(path.normalize(sourcePath));
+}
+
+function getMacosGdbSetupHint(errorText, gdbPath) {
+    if (process.platform !== "darwin")
+        return null;
+
+    const normalizedText = String(errorText || "");
+
+    if (!/Mach task port|taskgated|codesign/i.test(normalizedText))
+        return null;
+
+    const resolvedPath = resolveGdbPath(gdbPath || "gdb");
+
+    return [
+        "macOS blocked GDB from controlling the debuggee.",
+        `Codesign '${resolvedPath}' with a trusted certificate, then set 'freebasic.debugger.gdbPath' or 'gdbPath' to that signed executable.`
+    ].join(" ");
+}
+
+function getMacosReducedFunctionalityMessage(gdbPath) {
+    const setupHint = getMacosGdbSetupHint("codesign", gdbPath);
+
+    if (!setupHint)
+        return null;
+
+    return [
+        setupHint,
+        "Running without debugger features for this session, so breakpoints, stepping, watches, and pause are unavailable."
+    ].join(" ");
 }
 
 function mergeEnvironment(customEnvironment) {
@@ -1568,6 +1806,7 @@ module.exports = {
         getDefaultConsoleKind,
         normalizeConsoleKind,
         createUnixInferiorTerminalSession,
+        createUnixRunFallbackSession,
         waitForTextFile,
         toPosixShellPath,
         ensureSession,
@@ -1578,6 +1817,8 @@ module.exports = {
         resolveGdbPath,
         normalizeMiArray,
         normalizeSourcePath,
+        getMacosGdbSetupHint,
+        getMacosReducedFunctionalityMessage,
         mergeEnvironment,
         toGdbPath,
         buildCompilerArguments,

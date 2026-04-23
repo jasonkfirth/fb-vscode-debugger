@@ -147,20 +147,28 @@ async function testConsoleHelpersChooseExpectedDefaults() {
 async function testCompileProgramSucceedsWithMockCompiler() {
     const tempDirectory = createTemporaryDirectory("fb-adapter-");
     const outputProgram = path.join(tempDirectory, "demo.exe");
+    const originalExistsSync = fs.existsSync;
 
-    await withPatchedMethod(cp, "spawn", () => createFakeSpawnProcess({
-        start(child) {
-            fs.writeFileSync(outputProgram, "binary", "utf8");
-            child.emit("exit", 0);
-        }
-    }), async () => {
-        await testApi.compileProgram({
-            compilerPath: "fbc",
-            compilerArgs: [],
-            sourceFile: path.join(tempDirectory, "demo.bas"),
-            program: outputProgram,
-            cwd: tempDirectory,
-            env: {}
+    await withPatchedMethod(fs, "existsSync", (filePath) => {
+        if (String(filePath) === outputProgram)
+            return true;
+
+        return originalExistsSync.call(fs, filePath);
+    }, async () => {
+        await withPatchedMethod(cp, "spawn", () => createFakeSpawnProcess({
+            start(child) {
+                fs.writeFileSync(outputProgram, "binary", "utf8");
+                child.emit("exit", 0);
+            }
+        }), async () => {
+            await testApi.compileProgram({
+                compilerPath: "fbc",
+                compilerArgs: [],
+                sourceFile: path.join(tempDirectory, "demo.bas"),
+                program: outputProgram,
+                cwd: tempDirectory,
+                env: {}
+            });
         });
     });
 }
@@ -240,6 +248,18 @@ async function testMapStopReasonAndExpandableValueHelpers() {
     assert.strictEqual(testApi.extractExitCode({}), 0);
     assert.strictEqual(testApi.shouldTryExpandValue("{demo}"), true);
     assert.strictEqual(testApi.shouldTryExpandValue("plain"), false);
+}
+
+async function testGetMacosGdbSetupHintRecognizesTaskgatedFailure() {
+    await withTemporaryPlatform("darwin", async () => {
+        const hint = testApi.getMacosGdbSetupHint(
+            "Unable to find Mach task port for process-id 12676: (os/kern) failure (0x5). (please check gdb is codesigned - see taskgated(8))",
+            "/usr/local/bin/gdb"
+        );
+
+        assert.match(hint, /macOS blocked GDB/i);
+        assert.match(hint, /Codesign '\/usr\/local\/bin\/gdb'/);
+    });
 }
 
 async function testLaunchResponseIsSentBeforeConfigurationDone() {
@@ -326,6 +346,150 @@ async function testLaunchResponseIsSentBeforeConfigurationDone() {
     );
 }
 
+async function testRunOnlyFallbackSkipsGdbStartup() {
+    const sentMessages = [];
+    const connection = {
+        send(message) {
+            sentMessages.push(message);
+        },
+        start() {}
+    };
+    const adapter = new testApi.FreeBasicGdbAdapter(connection);
+    let startedGdb = false;
+
+    await withPatchedMethod(
+        testApi.GdbSession.prototype,
+        "start",
+        async function patchedStart() {
+            startedGdb = true;
+        },
+        async () => {
+            await withTemporaryPlatform("darwin", async () => {
+                await adapter.launchRequest({
+                    seq: 10,
+                    command: "launch"
+                }, {
+                    sourceFile: "demo.bas",
+                    program: "demo",
+                    cwd: process.cwd(),
+                    compilerPath: "fbc",
+                    gdbPath: "/usr/local/bin/gdb",
+                    args: [],
+                    env: {},
+                    skipBuild: true,
+                    stopAtEntry: false,
+                    unsignedMacosGdbFallback: true
+                });
+            });
+        }
+    );
+
+    assert.strictEqual(startedGdb, false);
+    assert.strictEqual(adapter.runWithoutDebugger, true);
+    assert.strictEqual(
+        sentMessages.some((message) => (
+            message.type === "response" &&
+            message.command === "launch"
+        )),
+        true
+    );
+    assert.match(
+        sentMessages
+            .filter((message) => message.type === "event" && message.event === "output")
+            .map((message) => message.body.output)
+            .join(""),
+        /without GDB/
+    );
+}
+
+async function testRunOnlyFallbackConfigurationDoneUsesRunInTerminal() {
+    const sentMessages = [];
+    const connection = {
+        send(message) {
+            sentMessages.push(message);
+        },
+        start() {}
+    };
+    const adapter = new testApi.FreeBasicGdbAdapter(connection);
+    const tempDirectory = createTemporaryDirectory("fb-run-fallback-");
+    const originalNow = Date.now;
+    const originalRandom = Math.random;
+    const originalExistsSync = fs.existsSync;
+    const originalReadFileSync = fs.readFileSync;
+    const clientRequests = [];
+
+    adapter.clientSupportsRunInTerminal = true;
+    adapter.runWithoutDebugger = true;
+    adapter.launchArguments = {
+        cwd: tempDirectory,
+        console: "integratedTerminal",
+        program: "/tmp/demo",
+        args: ["one", "two"],
+        env: {
+            DEMO: "1"
+        }
+    };
+
+    Date.now = () => 2000;
+    Math.random = () => 0;
+
+    try {
+        await withTemporaryPlatform("darwin", async () => {
+            await withPatchedMethod(os, "tmpdir", () => tempDirectory, async () => {
+                await withPatchedMethod(fs, "existsSync", (filePath) => {
+                    if (String(filePath).indexOf("freebasic-debugger-run-exit-") !== -1)
+                        return true;
+
+                    return originalExistsSync.call(fs, filePath);
+                }, async () => {
+                    await withPatchedMethod(fs, "readFileSync", (filePath, encoding) => {
+                        if (String(filePath).indexOf("freebasic-debugger-run-exit-") !== -1)
+                            return "0\n";
+
+                        return originalReadFileSync.call(fs, filePath, encoding);
+                    }, async () => {
+                        adapter.sendClientRequest = async (command, args) => {
+                            clientRequests.push({ command, args });
+                            return {};
+                        };
+
+                        await adapter.configurationDoneRequest({
+                            seq: 11,
+                            command: "configurationDone"
+                        });
+
+                        await new Promise((resolve) => setImmediate(resolve));
+                    });
+                });
+            });
+        });
+    } finally {
+        Date.now = originalNow;
+        Math.random = originalRandom;
+    }
+
+    assert.strictEqual(clientRequests.length, 1);
+    assert.strictEqual(clientRequests[0].command, "runInTerminal");
+    assert.strictEqual(clientRequests[0].args.kind, "integrated");
+    assert.strictEqual(clientRequests[0].args.env.DEMO, "1");
+    assert.match(clientRequests[0].args.args[2], /'\/tmp\/demo'/);
+    assert.match(clientRequests[0].args.args[2], /'one' 'two'/);
+    assert.strictEqual(
+        sentMessages.some((message) => (
+            message.type === "response" &&
+            message.command === "configurationDone"
+        )),
+        true
+    );
+    assert.strictEqual(
+        sentMessages.some((message) => (
+            message.type === "event" &&
+            message.event === "terminated"
+        )),
+        true
+    );
+}
+
 async function testPrepareInferiorPresentationUsesRunInTerminalOnUnix() {
     const connection = {
         send() {},
@@ -335,6 +499,8 @@ async function testPrepareInferiorPresentationUsesRunInTerminalOnUnix() {
     const tempDirectory = createTemporaryDirectory("fb-terminal-");
     const originalNow = Date.now;
     const originalRandom = Math.random;
+    const originalExistsSync = fs.existsSync;
+    const originalReadFileSync = fs.readFileSync;
     const sentCommands = [];
     const clientRequests = [];
 
@@ -352,22 +518,28 @@ async function testPrepareInferiorPresentationUsesRunInTerminalOnUnix() {
     try {
         await withTemporaryPlatform("linux", async () => {
             await withPatchedMethod(os, "tmpdir", () => tempDirectory, async () => {
-                adapter.sendClientRequest = async (command, args) => {
-                    const token = `${process.pid}-1000-0`;
-                    const ttyMarkerPath = path.join(
-                        tempDirectory,
-                        `freebasic-debugger-tty-${token}.txt`
-                    );
+                await withPatchedMethod(fs, "existsSync", (filePath) => {
+                    if (String(filePath).indexOf("freebasic-debugger-tty-") !== -1)
+                        return true;
 
-                    clientRequests.push({ command, args });
-                    fs.writeFileSync(ttyMarkerPath, "/dev/pts/7\n", "utf8");
+                    return originalExistsSync.call(fs, filePath);
+                }, async () => {
+                    await withPatchedMethod(fs, "readFileSync", (filePath, encoding) => {
+                        if (String(filePath).indexOf("freebasic-debugger-tty-") !== -1)
+                            return "/dev/pts/7\n";
 
-                    return {};
-                };
+                        return originalReadFileSync.call(fs, filePath, encoding);
+                    }, async () => {
+                        adapter.sendClientRequest = async (command, args) => {
+                            clientRequests.push({ command, args });
+                            return {};
+                        };
 
-                await adapter.prepareInferiorPresentation({
-                    cwd: tempDirectory,
-                    console: "integratedTerminal"
+                        await adapter.prepareInferiorPresentation({
+                            cwd: tempDirectory,
+                            console: "integratedTerminal"
+                        });
+                    });
                 });
             });
         });
@@ -425,6 +597,14 @@ async function testGdbSessionRejectsPendingCommandsWhenDebuggerExits() {
             setTimeout(() => {
                 child.stdout.emit("data", Buffer.from("(gdb)\n"));
             }, 5);
+        },
+        onStdinWrite(text, child) {
+            const tokenMatch = /^(\d+)/.exec(text);
+
+            if (tokenMatch && text.indexOf("-exec-next") === -1) {
+                child.stdout.emit("data", Buffer.from(`${tokenMatch[1]}^done\n`));
+                child.stdout.emit("data", Buffer.from("(gdb)\n"));
+            }
         }
     }), async () => {
         await session.start({
@@ -449,6 +629,27 @@ async function testGdbSessionRejectsPendingCommandsWhenDebuggerExits() {
     assert.match(outputs.map((entry) => entry.output).join(""), /GDB exited with code 1/);
 }
 
+async function testAdapterAddsMacosGdbHintToErrors() {
+    const connection = {
+        send() {},
+        start() {}
+    };
+    const adapter = new testApi.FreeBasicGdbAdapter(connection);
+
+    await withTemporaryPlatform("darwin", async () => {
+        adapter.launchArguments = {
+            gdbPath: "/usr/local/bin/gdb"
+        };
+
+        const message = adapter.formatErrorMessage(new Error(
+            "Unable to find Mach task port for process-id 12676: (os/kern) failure (0x5)."
+        ));
+
+        assert.match(message, /macOS blocked GDB/i);
+        assert.match(message, /\/usr\/local\/bin\/gdb/);
+    });
+}
+
 module.exports = [
     testMiValueParserParsesTupleAndListValues,
     testParseMiLineHandlesResultAndConsoleRecords,
@@ -463,10 +664,14 @@ module.exports = [
     testCompileProgramRejectsWithCompilerOutput,
     testGdbSessionStartWaitsForPromptAndSendsSetupCommands,
     testMapStopReasonAndExpandableValueHelpers,
+    testGetMacosGdbSetupHintRecognizesTaskgatedFailure,
     testLaunchResponseIsSentBeforeConfigurationDone,
+    testRunOnlyFallbackSkipsGdbStartup,
+    testRunOnlyFallbackConfigurationDoneUsesRunInTerminal,
     testPrepareInferiorPresentationUsesRunInTerminalOnUnix,
     testPrepareInferiorPresentationUsesNewConsoleOnWindows,
-    testGdbSessionRejectsPendingCommandsWhenDebuggerExits
+    testGdbSessionRejectsPendingCommandsWhenDebuggerExits,
+    testAdapterAddsMacosGdbHintToErrors
 ];
 
 /* end of tests/adapter.unit.js */
