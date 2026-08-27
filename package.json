@@ -1,8 +1,8 @@
 {
   "name": "freebasic-native-debugger",
   "displayName": "FreeBASIC Native Debugger",
-  "description": "Press F5 on a FreeBASIC source file, build it with fbc, and debug it with GDB.",
-  "version": "1.20.1",
+  "description": "Press F5 on a FreeBASIC 1.20.3 source file, build it with fbc, and debug it with GDB.",
+  "version": "1.20.3",
   "publisher": "SJZero",
   "license": "MIT",
   "icon": "assets/icon.png",
@@ -55,7 +55,9 @@
         ],
         "extensions": [
           ".bas",
-          ".bi"
+          ".bi",
+          ".BAS",
+          ".BI"
         ]
       }
     ],
@@ -84,10 +86,11 @@
           "enum": [
             "auto",
             "x86",
-            "x64"
+            "x64",
+            "arm64"
           ],
           "default": "auto",
-          "description": "Preferred architecture when the debugger auto-selects a FreeBASIC compiler."
+          "description": "Preferred native architecture when the debugger auto-selects a FreeBASIC compiler. FreeBASIC 1.20.3 packages use fbc32.exe, fbc64.exe, and fbcarm64.exe on Windows."
         },
         "freebasic.debugger.compilerArgs": {
           "type": "array",
@@ -181,10 +184,11 @@
                 "enum": [
                   "auto",
                   "x86",
-                  "x64"
+                  "x64",
+                  "arm64"
                 ],
                 "default": "auto",
-                "description": "Select the FreeBASIC compiler automatically or force 32-bit / 64-bit."
+                "description": "Select the native FreeBASIC compiler automatically or force the x86, x64, or ARM64 package compiler."
               },
               "compilerArgs": {
                 "type": "array",
@@ -259,8 +263,10 @@
     ]
   },
   "scripts": {
-    "lint": "node --check extension.js && node --check adapter/freebasicGdbDebug.js",
+    "lint": "node --check extension.js && node --check adapter/freebasicGdbDebug.js && node --check lib/toolchainPaths.js && node --check tools/audit-freebasic-compatibility.js",
+    "audit:compiler": "node tools/audit-freebasic-compatibility.js",
     "test:unit": "node tests/run_unit_tests.js",
+    "test:smoke:linux": "bash ./tests/runExtensionSmoke.sh",
     "package:vsix": "vsce package",
     "package:pre-release": "vsce package --pre-release",
     "publish:manual": "vsce publish",

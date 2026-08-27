@@ -61,11 +61,39 @@ async function testCommandExistsFindsExecutableOnPath() {
     });
 }
 
-async function testChooseCompilerPathPrefersWindowsFbcExe() {
+async function testChooseCompilerPathUsesFreeBasicReleaseArchitectureNames() {
     withTemporaryPlatform("win32", () => {
-        withPatchedMethod(fs, "existsSync", (filePath) => /fbc\.exe$/i.test(String(filePath)), () => {
-            assert.strictEqual(testApi.chooseCompilerPath("auto"), "C:\\freebasic\\fbc.exe");
-            assert.strictEqual(testApi.chooseCompilerPath("x64"), "C:\\freebasic\\fbc.exe");
+        withPatchedMethod(fs, "existsSync", (filePath) => (
+            /fbc(?:32|64|arm64)\.exe$/i.test(String(filePath))
+        ), () => {
+            assert.strictEqual(
+                testApi.chooseCompilerPath("auto", "x64"),
+                "C:\\freebasic\\fbc64.exe"
+            );
+            assert.strictEqual(
+                testApi.chooseCompilerPath("x86", "x64"),
+                "C:\\freebasic\\fbc32.exe"
+            );
+            assert.strictEqual(
+                testApi.chooseCompilerPath("arm64", "x64"),
+                "C:\\freebasic\\fbcarm64.exe"
+            );
+        });
+    });
+}
+
+async function testChooseCompilerPathFindsArchitectureCompilerOnPath() {
+    const tempDirectory = createTemporaryDirectory("fb-compiler-path-");
+    const compilerPath = path.join(tempDirectory, "fbc64.exe");
+
+    fs.writeFileSync(compilerPath, "compiler", "utf8");
+
+    withTemporaryPlatform("win32", () => {
+        withTemporaryEnv({
+            PATH: tempDirectory,
+            PATHEXT: ".EXE"
+        }, () => {
+            assert.strictEqual(testApi.chooseCompilerPath("x64"), compilerPath);
         });
     });
 }
@@ -146,12 +174,12 @@ async function testCreateDefaultConfigurationUsesSettingsAndPlatformSuffix() {
     };
 
     withTemporaryPlatform("win32", () => {
-        withPatchedMethod(fs, "existsSync", (filePath) => /fbc\.exe$/i.test(String(filePath)), () => {
+        withPatchedMethod(fs, "existsSync", (filePath) => /fbc64\.exe$/i.test(String(filePath)), () => {
             const configuration = testApi.createDefaultConfiguration("C:\\games\\demo.bas");
 
             assert.strictEqual(configuration.arch, "x64");
             assert.strictEqual(configuration.program, "C:\\games\\demo.exe");
-            assert.strictEqual(configuration.compilerPath, "C:\\freebasic\\fbc.exe");
+            assert.strictEqual(configuration.compilerPath, "C:\\freebasic\\fbc64.exe");
             assert.deepStrictEqual(configuration.compilerArgs, ["-w", "pedantic"]);
             assert.deepStrictEqual(configuration.args, ["demo"]);
             assert.strictEqual(configuration.console, "externalTerminal");
@@ -216,6 +244,31 @@ async function testParseCompilerDiagnosticsGroupsMessagesByFile() {
     assert.match(diagnostics[0].message, /Variable not declared/);
     assert.match(diagnostics[0].message, /in 'IF k = "6"/);
     assert.strictEqual(diagnostics[1].code, "133");
+}
+
+async function testParseCompilerDiagnosticsHandlesCurrentWarningLevels() {
+    const diagnosticsByFile = testApi.parseCompilerDiagnostics([
+        "/work/demo.bas(7) warning 5(1): Implicit conversion",
+        "/work/demo.bas(9) error warning 6(2): Suspicious pointer conversion"
+    ].join("\n"));
+    const diagnostics = diagnosticsByFile.get("/work/demo.bas");
+
+    assert.strictEqual(diagnostics.length, 2);
+    assert.strictEqual(diagnostics[0].code, "5");
+    assert.strictEqual(diagnostics[0].severity, vscode.DiagnosticSeverity.Warning);
+    assert.strictEqual(diagnostics[1].code, "6");
+    assert.strictEqual(diagnostics[1].severity, vscode.DiagnosticSeverity.Error);
+}
+
+async function testParseCompilerVersionOutputHandlesReleaseBuild() {
+    const compilerInformation = testApi.parseCompilerVersionOutput(
+        "FreeBASIC Compiler - Version 1.20.3-1 (2026-08-13), built for linux-x86_64 (64bit)"
+    );
+
+    assert.strictEqual(compilerInformation.version, "1.20.3");
+    assert.strictEqual(compilerInformation.revision, "1");
+    assert.strictEqual(compilerInformation.target, "linux-x86_64");
+    assert.strictEqual(compilerInformation.bitness, 64);
 }
 
 async function testBuildCompilerArgumentsAddsDebugAndOutput() {
@@ -486,7 +539,8 @@ async function testProviderFallsBackToRunOnlyWhenGdbMissingOnWindows() {
 
 module.exports = [
     testCommandExistsFindsExecutableOnPath,
-    testChooseCompilerPathPrefersWindowsFbcExe,
+    testChooseCompilerPathUsesFreeBasicReleaseArchitectureNames,
+    testChooseCompilerPathFindsArchitectureCompilerOnPath,
     testChooseCompilerPathPrefersKnownMacosInstall,
     testChooseGdbPathPrefersKnownWindowsInstall,
     testGetMacosUnsignedGdbMessageDetectsUnsignedBinary,
@@ -497,6 +551,8 @@ module.exports = [
     testBuildConfigurationSkeletonKeepsVariableBasedSourceFile,
     testFinalizeConfigurationRejectsBiLaunchTarget,
     testParseCompilerDiagnosticsGroupsMessagesByFile,
+    testParseCompilerDiagnosticsHandlesCurrentWarningLevels,
+    testParseCompilerVersionOutputHandlesReleaseBuild,
     testBuildCompilerArgumentsAddsDebugAndOutput,
     testCompileProgramBeforeDebugSuccessWritesOutput,
     testCompileProgramBeforeDebugFailurePublishesDiagnostics,

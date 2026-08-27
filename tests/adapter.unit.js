@@ -86,11 +86,23 @@ async function testDapConnectionReadsAndWritesMessages() {
     assert.match(writtenText, /"event":"test"/);
 }
 
-async function testResolveCompilerPathPrefersWindowsFbcExe() {
+async function testResolveCompilerPathUsesFreeBasicReleaseArchitectureNames() {
     withTemporaryPlatform("win32", () => {
-        withPatchedMethod(fs, "existsSync", (filePath) => /fbc\.exe$/i.test(String(filePath)), () => {
-            assert.strictEqual(testApi.resolveCompilerPath("fbc64.exe"), "C:\\freebasic\\fbc.exe");
-            assert.strictEqual(testApi.resolveCompilerPath("fbc"), "C:\\freebasic\\fbc.exe");
+        withPatchedMethod(fs, "existsSync", (filePath) => (
+            /fbc(?:32|64|arm64)\.exe$/i.test(String(filePath))
+        ), () => {
+            assert.strictEqual(
+                testApi.resolveCompilerPath("fbc64.exe"),
+                "C:\\freebasic\\fbc64.exe"
+            );
+            assert.strictEqual(
+                testApi.resolveCompilerPath("fbcarm64.exe"),
+                "C:\\freebasic\\fbcarm64.exe"
+            );
+            assert.strictEqual(
+                testApi.resolveCompilerPath("fbc", "x86"),
+                "C:\\freebasic\\fbc32.exe"
+            );
         });
     });
 }
@@ -757,7 +769,7 @@ module.exports = [
     testMiValueParserParsesTupleAndListValues,
     testParseMiLineHandlesResultAndConsoleRecords,
     testDapConnectionReadsAndWritesMessages,
-    testResolveCompilerPathPrefersWindowsFbcExe,
+    testResolveCompilerPathUsesFreeBasicReleaseArchitectureNames,
     testResolveCompilerPathPrefersKnownMacosInstall,
     testResolveGdbPathFindsKnownWindowsInstall,
     testNormalizeHelpersProduceExpectedShapes,

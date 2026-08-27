@@ -42,6 +42,7 @@ const LINUX_COMPILER_CANDIDATES = toolchainPaths.LINUX_COMPILER_CANDIDATES;
 const WINDOWS_GDB_CANDIDATES = toolchainPaths.WINDOWS_GDB_CANDIDATES;
 const MACOS_GDB_CANDIDATES = toolchainPaths.MACOS_GDB_CANDIDATES;
 const LINUX_GDB_CANDIDATES = toolchainPaths.LINUX_GDB_CANDIDATES;
+const FREEBASIC_RELEASE = toolchainPaths.FREEBASIC_RELEASE;
 const FREEBASIC_DIAGNOSTIC_SOURCE = "FreeBASIC";
 const FREEBASIC_SETTINGS_SECTION = "freebasic.debugger";
 const FREEBASIC_OUTPUT_CHANNEL_NAME = "FreeBASIC Debugger";
@@ -371,68 +372,57 @@ function selectMacosDebuggerFallback(gdbPath) {
     };
 }
 
-function chooseCompilerPath(arch) {
-    const normalizedArch = (arch || "auto").toLowerCase();
+function chooseCompilerPath(arch, hostArchitecture) {
     const isWindows = process.platform === "win32";
     const isMacos = process.platform === "darwin";
-    const candidateCompilers = [];
-    const preferredCompilerNames = [];
 
     /*
         FreeBASIC packaging differs by platform.
 
-        On Windows it is common to have fbc32/fbc64 launchers.
+        FreeBASIC 1.20.3 uses architecture-specific compiler names on
+        Windows, including a separate fbcarm64 package. The Unix packages
+        expose the native compiler as fbc.
+
         On Linux and macOS the compiler is usually just "fbc" on PATH.
     */
-    if (normalizedArch === "x64") {
-        preferredCompilerNames.push(isWindows ? "fbc.exe" : "fbc");
-        preferredCompilerNames.push(isWindows ? "fbc64.exe" : "fbc64");
-        preferredCompilerNames.push("fbc");
-    } else if (normalizedArch === "x86") {
-        preferredCompilerNames.push(isWindows ? "fbc.exe" : "fbc");
-        preferredCompilerNames.push(isWindows ? "fbc32.exe" : "fbc32");
-        preferredCompilerNames.push("fbc");
-    } else {
-        if (isWindows) {
-            preferredCompilerNames.push("fbc.exe");
-            preferredCompilerNames.push("fbc64.exe");
-            preferredCompilerNames.push("fbc32.exe");
-        }
-
-        preferredCompilerNames.push("fbc");
-    }
-
     if (isWindows) {
-        for (const candidatePath of WINDOWS_COMPILER_CANDIDATES) {
-            if (normalizedArch === "x64" && candidatePath.toLowerCase().indexOf("fbc32") !== -1)
-                continue;
+        const preferredCompilerNames = toolchainPaths.getWindowsCompilerNames(
+            arch,
+            hostArchitecture
+        );
 
-            if (normalizedArch === "x86" && candidatePath.toLowerCase().indexOf("fbc64") !== -1)
-                continue;
+        for (const compilerName of preferredCompilerNames) {
+            for (const candidatePath of WINDOWS_COMPILER_CANDIDATES) {
+                const candidateName = path.win32.basename(candidatePath).toLowerCase();
 
-            candidateCompilers.push(candidatePath);
-        }
-    } else if (isMacos) {
-        for (const candidatePath of MACOS_COMPILER_CANDIDATES)
-            candidateCompilers.push(candidatePath);
-    } else {
-        for (const candidatePath of LINUX_COMPILER_CANDIDATES)
-            candidateCompilers.push(candidatePath);
-    }
-
-    for (const candidateName of preferredCompilerNames)
-        candidateCompilers.push(candidateName);
-
-    for (const candidateCompiler of candidateCompilers) {
-        if (candidateCompiler.indexOf(path.sep) !== -1 || candidateCompiler.indexOf("/") !== -1) {
-            if (fileExists(candidateCompiler))
-                return candidateCompiler;
-
-            continue;
+                if (candidateName === compilerName.toLowerCase() && fileExists(candidatePath))
+                    return candidatePath;
+            }
         }
 
-        return candidateCompiler;
+        for (const compilerName of preferredCompilerNames) {
+            const resolvedPath = resolveCommandOnPath(compilerName);
+
+            if (resolvedPath)
+                return resolvedPath;
+        }
+
+        return preferredCompilerNames[0];
     }
+
+    const platformCandidates = isMacos
+        ? MACOS_COMPILER_CANDIDATES
+        : LINUX_COMPILER_CANDIDATES;
+
+    for (const candidatePath of platformCandidates) {
+        if (fileExists(candidatePath))
+            return candidatePath;
+    }
+
+    const resolvedPath = resolveCommandOnPath("fbc");
+
+    if (resolvedPath)
+        return resolvedPath;
 
     return "fbc";
 }
@@ -484,6 +474,52 @@ function resolveConfiguredGdbPath(gdbPath) {
     return chooseGdbPath();
 }
 
+function parseCompilerVersionOutput(outputText) {
+    const normalizedOutput = String(outputText || "").trim();
+    const versionMatch = /FreeBASIC Compiler - Version\s+([0-9]+\.[0-9]+\.[0-9]+)(?:-([^\s(]+))?/i.exec(
+        normalizedOutput
+    );
+
+    if (!versionMatch)
+        return null;
+
+    const targetMatch = /built for\s+([^\s]+)\s+\((\d+)bit\)/i.exec(normalizedOutput);
+
+    return {
+        version: versionMatch[1],
+        revision: versionMatch[2] || "",
+        target: targetMatch ? targetMatch[1] : "",
+        bitness: targetMatch ? Number(targetMatch[2]) : null,
+        displayText: normalizedOutput.split(/\r?\n/)[0]
+    };
+}
+
+function inspectCompiler(compilerPath, cwd, customEnvironment) {
+    try {
+        const inspection = cp.spawnSync(compilerPath, ["-version"], {
+            cwd,
+            env: mergeEnvironment(customEnvironment),
+            encoding: "utf8",
+            timeout: 5000,
+            windowsHide: true
+        });
+
+        if (inspection.error || inspection.status !== 0)
+            return null;
+
+        return parseCompilerVersionOutput([
+            inspection.stdout || "",
+            inspection.stderr || ""
+        ].join("\n"));
+    } catch (_error) {
+        /*
+            Version inspection is advisory. Compiler execution below remains
+            authoritative and produces the normal launch error if necessary.
+        */
+        return null;
+    }
+}
+
 function getProgramSuffix() {
     if (process.platform === "win32")
         return ".exe";
@@ -528,18 +564,19 @@ function parseCompilerDiagnostics(errorText) {
         if (!line)
             continue;
 
-        const diagnosticMatch = /^(.*)\((\d+)\)\s+(error|warning)\s+(\d+):\s*(.*)$/i.exec(line);
+        const diagnosticMatch = /^(.*)\((\d+)\)\s+(?:(error)\s+)?(error|warning)\s+(\d+)(?:\(\d+\))?:\s*(.*)$/i.exec(line);
 
         if (diagnosticMatch) {
             const filePath = normalizeExistingPathCase(diagnosticMatch[1].trim());
             const lineNumber = Math.max(Number(diagnosticMatch[2]) - 1, 0);
-            const severityName = diagnosticMatch[3].toLowerCase();
-            const errorCode = diagnosticMatch[4];
-            const messageText = diagnosticMatch[5].trim();
+            const warningPromotedToError = Boolean(diagnosticMatch[3]);
+            const severityName = diagnosticMatch[4].toLowerCase();
+            const errorCode = diagnosticMatch[5];
+            const messageText = diagnosticMatch[6].trim();
             const diagnostic = new vscode.Diagnostic(
                 new vscode.Range(lineNumber, 0, lineNumber, Number.MAX_SAFE_INTEGER),
                 messageText,
-                severityName === "warning"
+                severityName === "warning" && !warningPromotedToError
                     ? vscode.DiagnosticSeverity.Warning
                     : vscode.DiagnosticSeverity.Error
             );
@@ -995,10 +1032,26 @@ class FreeBasicConfigurationProvider {
                 `resolveWithSubstitutedVariables compiler-missing ${resolvedConfiguration.compilerPath}`
             );
             vscode.window.showErrorMessage(
-                "Unable to find the FreeBASIC compiler. Install FreeBASIC, put 'fbc' or 'fbc.exe' on PATH, or set 'freebasic.debugger.compilerPath' or 'compilerPath' to a real compiler executable such as 'C:\\freebasic\\fbc.exe'."
+                "Unable to find the FreeBASIC compiler. Install FreeBASIC, put 'fbc' on PATH, or set 'freebasic.debugger.compilerPath' or 'compilerPath' to a real compiler executable such as fbc64.exe, fbc32.exe, or fbcarm64.exe."
             );
 
             return undefined;
+        }
+
+        const compilerInformation = inspectCompiler(
+            resolvedConfiguration.compilerPath,
+            resolvedConfiguration.cwd,
+            resolvedConfiguration.env
+        );
+
+        if (compilerInformation) {
+            this.outputChannel.appendLine(
+                `Compiler: ${compilerInformation.displayText} (debugger profile ${FREEBASIC_RELEASE})`
+            );
+            appendTraceLine(
+                traceFilePath,
+                `compiler-version version=${compilerInformation.version} target=${compilerInformation.target || "unknown"}`
+            );
         }
 
         if (!fileExistsOrCommand(resolvedConfiguration.gdbPath)) {
@@ -1229,6 +1282,8 @@ module.exports = {
         normalizeExistingPathCase,
         clearDiagnosticsForSource,
         parseCompilerDiagnostics,
+        parseCompilerVersionOutput,
+        inspectCompiler,
         applyCompilerDiagnostics,
         buildCompilerArguments,
         mergeEnvironment,

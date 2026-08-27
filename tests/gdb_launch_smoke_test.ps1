@@ -198,9 +198,9 @@ function Invoke-GdbLaunchTest {
     }
 }
 
-$consoleSource = Join-Path $WorkspaceRoot "test-workspace\gdb-console-smoke.bas"
+$consoleSource = Join-Path $WorkspaceRoot "tests\fixtures\gdb-console-smoke.bas"
 $consoleProgram = Join-Path $WorkspaceRoot "test-workspace\gdb-console-smoke.exe"
-$windowSource = Join-Path $WorkspaceRoot "test-workspace\gdb-window-smoke.bas"
+$windowSource = Join-Path $WorkspaceRoot "tests\fixtures\gdb-window-smoke.bas"
 $windowProgram = Join-Path $WorkspaceRoot "test-workspace\gdb-window-smoke.exe"
 $markerToken = "{0}-{1}" -f [System.Diagnostics.Process]::GetCurrentProcess().Id, [DateTime]::UtcNow.Ticks
 $consoleMarker = Join-Path $WorkspaceRoot ("test-workspace\gdb-console-marker-{0}.txt" -f $markerToken)

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.20.3
+
+- Aligned the debugger profile and release metadata with FreeBASIC 1.20.3
+- Added a source audit for the compiler's `-g`, `-x`, and subsystem behavior, include-file debug records, diagnostic format, native target names, and Windows package executables
+- Added native Windows ARM64 compiler discovery through `fbcarm64.exe`, alongside corrected `fbc32.exe` and `fbc64.exe` selection by host or configured architecture
+- Added current compiler version and target reporting to the FreeBASIC Debugger output channel
+- Updated compiler diagnostic parsing for the current `warning N(level):` form and warnings promoted to errors
+- Registered uppercase `.BAS` and `.BI` source extensions on case-sensitive systems
+- Ported the extension-host smoke launcher to Linux with isolated VS Code state, timeouts, failure log tails, environment isolation, and tracked smoke sources
+- Corrected Linux smoke coverage so the Windows-only `-s gui` compiler option is not passed to a native Linux compiler
+- Verified both smoke programs with the supplied FreeBASIC 1.20.3 compiler and GDB, then passed the full Linux VS Code extension-host smoke run
+
 ## 1.20.1
 
 - Added cross-platform reduced-functionality fallback behavior so `F5` still launches the program when GDB is missing on Windows, Linux, or macOS

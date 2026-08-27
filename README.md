@@ -1,6 +1,6 @@
 # FreeBASIC Native Debugger
 
-This is a native VS Code debugger for FreeBASIC.
+This is a native VS Code debugger aligned with FreeBASIC 1.20.3.
 
 Press `F5` on a `.bas` file, the extension builds it with `fbc -g`,
 then starts the program under the available native debugger for your platform.
@@ -12,15 +12,17 @@ VS Code instead of a language that needs manual task wiring every time.
 - Registers a `freebasic-gdb` debugger type.
 - Builds the active `.bas` file with `fbc` by default.
 - Lets you override the compiler path when a platform-specific launcher such as
-  `fbc.exe`, `fbc64`, `fbc32`, `fbc64.exe`, or `fbc32.exe` is preferred.
+  `fbc`, `fbc64.exe`, `fbc32.exe`, or `fbcarm64.exe` is preferred.
 - Launches the resulting program with GDB by default, with a run-only fallback
   when GDB is missing or unusable.
 - Exposes breakpoints, continue, pause, stepping, stack frames, locals, and
   expression evaluation through the Debug Adapter Protocol.
 - Parses FreeBASIC compile errors into the Problems panel before debugger
   launch.
+- Parses the current compiler warning form, including warning levels and
+  warnings promoted to errors.
 - Writes compiler and debugger status details to the `FreeBASIC Debugger`
-  output channel.
+  output channel, including the detected compiler version and target.
 
 ## Platform support
 
@@ -29,8 +31,11 @@ VS Code instead of a language that needs manual task wiring every time.
   the extension still launches the program in a reduced run-only session
   without debugger features.
 - The extension assumes `fbc` and `gdb` are available on `PATH`.
-- On Windows, compiler discovery prefers `fbc.exe` first, then falls back to
-  `fbc64.exe` / `fbc32.exe` when needed.
+- On Windows, compiler discovery prefers the native package compiler:
+  `fbc32.exe`, `fbc64.exe`, or `fbcarm64.exe`. The legacy `fbc.exe` name
+  remains a fallback.
+- The `arch` setting accepts `auto`, `x86`, `x64`, and `arm64`. `auto` follows
+  the architecture of the VS Code extension host.
 - On Windows, the generated output name ends in `.exe`.
 - On Windows, console programs default to an external console window because
   that is the most reliable way to let a GDB-launched console program interact
@@ -40,6 +45,9 @@ VS Code instead of a language that needs manual task wiring every time.
   the debuggee gets a real TTY.
 - If your setup uses a non-default compiler or debugger location, set
   `compilerPath` and `gdbPath` in `launch.json`.
+- FreeBASIC 1.20.3 accepts `-s gui` for Windows, Cygwin, and JavaScript
+  targets. Native Linux and macOS launches should select their terminal with
+  the debugger's `console` setting instead of passing `-s gui`.
 
 ## Fallback behavior
 
@@ -75,6 +83,28 @@ In the common Windows setups, that means you usually do not have to set
 
 If we later bundle GDB with the extension, placing it in `tools/gdb` is enough
 for the resolver to prefer it automatically.
+
+## FreeBASIC 1.20.3 alignment
+
+The checked-in debugger profile is audited against the compiler source that
+defines the behavior used during launch:
+
+- `src/compiler/fbc.bas` for `-g`, `-x`, `-s`, target architectures, and
+  subsystem restrictions
+- `src/compiler/error.bas` for numbered errors and warning levels
+- `src/compiler/edbg_stab.bas` for include-file source records
+- `build_scripts/msys2-build-freebasic.sh` for `fbc32.exe`, `fbc64.exe`, and
+  `fbcarm64.exe` package names
+
+Run the audit against a compiler checkout with:
+
+```sh
+npm run audit:compiler -- --freebasic-root /path/to/fbc
+```
+
+`FREEBASIC_ROOT` can be used instead. The audit reads Git tag `v1.20.3` and
+also stops if the working checkout has changed any compatibility source since
+that tag without a corresponding debugger review.
 
 ## Using F5
 
@@ -150,3 +180,5 @@ these in normal VS Code settings:
 - If GDB is missing or unusable, the extension still builds and launches with
   `F5`, but it warns that the session is running without debugger features.
 - On macOS, the best experience is still a properly codesigned GDB.
+- `.bas`, `.bi`, `.BAS`, and `.BI` are registered so source recognition also
+  works on case-sensitive filesystems.

@@ -129,13 +129,11 @@ $StderrPath = Join-Path $BaseTempPath "code-stderr.txt"
 $StartTime = Get-Date
 $Succeeded = $false
 
-if (-not (Test-Path -LiteralPath $WorkspaceRoot)) {
-    throw "Smoke workspace not found: $WorkspaceRoot"
-}
-
 if (-not (Test-Path -LiteralPath $TestScriptPath)) {
     throw "Smoke test entry point not found: $TestScriptPath"
 }
+
+New-Item -ItemType Directory -Path $WorkspaceRoot -Force | Out-Null
 
 Remove-PathIfPresent -LiteralPath $BaseTempPath
 New-Item -ItemType Directory -Path $UserDataPath -Force | Out-Null

@@ -222,14 +222,17 @@ function buildLaunchPathValue(compilerPath, gdbPath) {
     return pathEntries.filter((entry) => Boolean(entry)).join(path.delimiter);
 }
 
-function createScenarioDefinitions(workspaceRoot) {
+function createScenarioDefinitions(workspaceRoot, fixtureRoot) {
     const programSuffix = getProgramSuffix();
     const defaultConsoleKind = getDefaultConsoleKind();
+    const windowCompilerArguments = process.platform === "win32"
+        ? ["-s", "gui"]
+        : [];
 
     return [
         {
             name: "console",
-            sourceFile: path.join(workspaceRoot, "gdb-console-smoke.bas"),
+            sourceFile: path.join(fixtureRoot, "gdb-console-smoke.bas"),
             program: path.join(workspaceRoot, `gdb-console-smoke-vscode${programSuffix}`),
             compilerArgs: [],
             expectedMarkerLine: "started",
@@ -237,9 +240,9 @@ function createScenarioDefinitions(workspaceRoot) {
         },
         {
             name: "window",
-            sourceFile: path.join(workspaceRoot, "gdb-window-smoke.bas"),
+            sourceFile: path.join(fixtureRoot, "gdb-window-smoke.bas"),
             program: path.join(workspaceRoot, `gdb-window-smoke-vscode${programSuffix}`),
-            compilerArgs: ["-s", "gui"],
+            compilerArgs: windowCompilerArguments,
             expectedMarkerLine: "started",
             console: defaultConsoleKind
         }
@@ -439,13 +442,21 @@ exports.run = async function run() {
     const vscode = require("vscode");
     const extensionRoot = path.resolve(__dirname, "..");
     const workspaceRoot = path.join(extensionRoot, "test-workspace");
+    const fixtureRoot = path.join(extensionRoot, "tests", "fixtures");
     const compilerPath = getDefaultCompilerPath();
     const gdbPath = getDefaultGdbPath();
     const pathValue = buildLaunchPathValue(compilerPath, gdbPath);
     const extensionIdentifier = getExtensionIdentifier(extensionRoot);
     const summaryFile = path.join(workspaceRoot, "extension-smoke-summary.txt");
-    const scenarios = createScenarioDefinitions(workspaceRoot);
+    const scenarios = createScenarioDefinitions(workspaceRoot, fixtureRoot);
     const results = [];
+
+    fs.mkdirSync(workspaceRoot, { recursive: true });
+
+    for (const scenario of scenarios) {
+        if (!fileExists(scenario.sourceFile))
+            throw new Error(`Smoke test source is missing: ${scenario.sourceFile}`);
+    }
 
     ensureFileDeleted(summaryFile);
     writeLogLine(summaryFile, `extension=${extensionIdentifier}`);
@@ -456,9 +467,6 @@ exports.run = async function run() {
         summaryFile,
         `workspace-folders=${vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders.length : 0}`
     );
-
-    if (!fileExists(workspaceRoot))
-        throw new Error(`Smoke test workspace is missing: ${workspaceRoot}`);
 
     if (!vscode.workspace.isTrusted)
         throw new Error("The extension smoke test must run in a trusted workspace.");

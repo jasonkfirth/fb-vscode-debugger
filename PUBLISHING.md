@@ -1,34 +1,28 @@
 # Publishing Guide
 
-The checked-in manifest intentionally keeps `publisher: "local"` so local
-testing does not depend on Marketplace metadata.
-
-When you are ready to publish, use `package.marketplace.template.json` as a
-reference for the final `package.json` metadata values.
+The checked-in manifest contains the Marketplace publisher metadata. Use
+`package.marketplace.template.json` as a compact reference when release fields
+need to be reviewed.
 
 ## Before packaging
 
-1. Create or choose your Visual Studio Marketplace publisher.
-2. Copy the template fields you want from `package.marketplace.template.json`
-   into `package.json`.
-3. Replace the placeholder values:
-   - `publisher`
-   - `repository.url`
-   - `homepage`
-   - `bugs.url`
-4. Make sure the icon, README, changelog, license, and third-party notices are
+1. Confirm that `package.json` and `package.marketplace.template.json` both use
+   version `1.20.3` and the intended publisher.
+2. Confirm the repository, homepage, and issue tracker URLs.
+3. Make sure the icon, README, changelog, license, and third-party notices are
    all in their final form.
 
 ## Install packaging tools
 
-```powershell
+```sh
 npm install -g @vscode/vsce
 ```
 
 ## Validate the extension package contents
 
-```powershell
+```sh
 npm run lint
+npm run audit:compiler -- --freebasic-root /path/to/fbc
 npm run package:vsix
 ```
 
@@ -36,8 +30,8 @@ This creates a `.vsix` package in the repository root.
 
 ## Install the packaged extension locally
 
-```powershell
-code --install-extension .\freebasic-native-debugger-0.1.2.vsix --force
+```sh
+code --install-extension ./freebasic-native-debugger-1.20.3.vsix --force
 ```
 
 ## Publish to the Marketplace
@@ -47,13 +41,13 @@ Access Token with Marketplace publishing rights.
 
 Common publish commands:
 
-```powershell
+```sh
 npm run publish:manual
 ```
 
 Version bump helpers:
 
-```powershell
+```sh
 npm run publish:patch
 npm run publish:minor
 npm run publish:major
@@ -61,15 +55,19 @@ npm run publish:major
 
 ## Pre-release packages
 
-```powershell
+```sh
 npm run package:pre-release
 ```
 
 ## Recommended release checklist
 
 - `npm run lint` passes
+- `npm run audit:compiler` passes against the release source
+- `npm run test:unit` passes
+- the Linux extension-host smoke test passes when preparing a Linux package
 - local `.vsix` installs cleanly
-- compiler discovery works with `fbc` / `fbc.exe`
+- compiler discovery works with `fbc`, `fbc32.exe`, `fbc64.exe`, and
+  `fbcarm64.exe` as applicable
 - missing-tool messages are readable
 - compile failures appear in Problems
 - launch, run, and basic stepping work on a real `.bas` file

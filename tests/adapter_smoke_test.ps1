@@ -130,7 +130,7 @@ function Wait-ForDapMessage {
     }
 }
 
-$sourceFile = Join-Path $WorkspaceRoot "test-workspace\smoke.bas"
+$sourceFile = Join-Path $WorkspaceRoot "tests\fixtures\gdb-console-smoke.bas"
 $programFile = Join-Path $WorkspaceRoot "test-workspace\smoke-direct.exe"
 $traceFile = Join-Path $WorkspaceRoot "test-workspace\adapter-direct-trace.log"
 $adapterPath = Join-Path $WorkspaceRoot "adapter\freebasicGdbDebug.js"

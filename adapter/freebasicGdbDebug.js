@@ -1464,7 +1464,49 @@ function fileExists(filePath) {
     }
 }
 
-function resolveCompilerPath(compilerPath) {
+function resolveCommandOnPath(commandName) {
+    const pathEntries = String(process.env.PATH || "")
+        .split(path.delimiter)
+        .filter((entry) => Boolean(entry));
+    const candidateNames = [commandName];
+
+    if (process.platform === "win32" && !path.extname(commandName)) {
+        const executableExtensions = String(process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM")
+            .split(";")
+            .filter((entry) => Boolean(entry));
+
+        for (const executableExtension of executableExtensions)
+            candidateNames.push(`${commandName}${executableExtension.toLowerCase()}`);
+    }
+
+    for (const pathEntry of pathEntries) {
+        for (const candidateName of candidateNames) {
+            const candidatePath = path.join(pathEntry, candidateName);
+
+            if (fileExists(candidatePath))
+                return candidatePath;
+        }
+    }
+
+    return null;
+}
+
+function getRequestedWindowsCompilerArchitecture(requestedPath, architecture) {
+    const requestedName = path.win32.basename(requestedPath).toLowerCase();
+
+    if (requestedName === "fbc32.exe")
+        return "x86";
+
+    if (requestedName === "fbc64.exe")
+        return "x64";
+
+    if (requestedName === "fbcarm64.exe")
+        return "arm64";
+
+    return architecture || "auto";
+}
+
+function resolveCompilerPath(compilerPath, architecture, hostArchitecture) {
     const requestedPath = String(compilerPath || "").trim();
     const isWindows = process.platform === "win32";
     const isMacos = process.platform === "darwin";
@@ -1484,36 +1526,37 @@ function resolveCompilerPath(compilerPath) {
             }
         }
 
-        return requestedPath || "fbc";
+        const resolvedPath = resolveCommandOnPath(requestedPath || "fbc");
+
+        return resolvedPath || requestedPath || "fbc";
     }
 
-    if (requestedPath.toLowerCase() === "fbc.exe" || requestedPath.toLowerCase() === "fbc") {
+    const requestedArchitecture = getRequestedWindowsCompilerArchitecture(
+        requestedPath,
+        architecture
+    );
+    const preferredCompilerNames = toolchainPaths.getWindowsCompilerNames(
+        requestedArchitecture,
+        hostArchitecture
+    );
+
+    for (const compilerName of preferredCompilerNames) {
         for (const candidatePath of WINDOWS_COMPILER_CANDIDATES) {
-            if (candidatePath.toLowerCase().indexOf("fbc.exe") !== -1 && fileExists(candidatePath))
+            const candidateName = path.win32.basename(candidatePath).toLowerCase();
+
+            if (candidateName === compilerName.toLowerCase() && fileExists(candidatePath))
                 return candidatePath;
         }
     }
 
-    if (requestedPath.toLowerCase() === "fbc64.exe") {
-        for (const candidatePath of WINDOWS_COMPILER_CANDIDATES) {
-            if (candidatePath.toLowerCase().indexOf("fbc64.exe") !== -1 && fileExists(candidatePath))
-                return candidatePath;
-        }
+    for (const compilerName of preferredCompilerNames) {
+        const resolvedPath = resolveCommandOnPath(compilerName);
+
+        if (resolvedPath)
+            return resolvedPath;
     }
 
-    if (requestedPath.toLowerCase() === "fbc32.exe") {
-        for (const candidatePath of WINDOWS_COMPILER_CANDIDATES) {
-            if (candidatePath.toLowerCase().indexOf("fbc32.exe") !== -1 && fileExists(candidatePath))
-                return candidatePath;
-        }
-    }
-
-    for (const candidatePath of WINDOWS_COMPILER_CANDIDATES) {
-        if (fileExists(candidatePath))
-            return candidatePath;
-    }
-
-    return requestedPath || "fbc";
+    return requestedPath || preferredCompilerNames[0];
 }
 
 function getBundledGdbCandidates() {
@@ -1679,7 +1722,7 @@ function buildCompilerArguments(args) {
 
 function compileProgram(args) {
     return new Promise((resolve, reject) => {
-        const compilerPath = resolveCompilerPath(args.compilerPath);
+        const compilerPath = resolveCompilerPath(args.compilerPath, args.arch);
         const compilerArguments = buildCompilerArguments(args);
         const environment = mergeEnvironment(args.env);
         let settled = false;
@@ -1858,6 +1901,7 @@ module.exports = {
         ensureSession,
         validateLaunchArguments,
         fileExists,
+        resolveCommandOnPath,
         resolveCompilerPath,
         getBundledGdbCandidates,
         resolveGdbPath,
